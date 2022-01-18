@@ -1,0 +1,197 @@
+
+---
+title: "HerbivoryGrazing"
+author: "Ewout Knoester"
+date: "17/01/2022"
+output: html_document
+---
+
+# Set R and packages
+```{r setup}
+
+rm(list=ls()) # Clear workspace
+knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
+
+library(readxl)
+library(tidyverse)
+library(panelr) # Convert data from wide to long
+library(lubridate) # Date calculations
+library(rstatix)
+library(glmmTMB) # Nested beta regression
+library(DHARMa) # Nested model validation
+library(car) # ANOVA results GLM
+library(emmeans) # Post hoccing
+library(ggpubr)
+library(ggplot2)
+library(ggthemes) # Pretty plots
+library(ggpattern) # Pretty bar plots
+library(NCmisc) # Check packages used
+library(stringr) # Get first word of string
+
+# Function to facilitate averaging dataset
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(sum = sum(x[[col]]),
+      mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE),
+      n  = length(x[[col]]),
+      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x)))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- plyr::rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+```
+
+# Load and organize
+```{r prepare data}
+
+# RAW data
+# load first xls sheet
+df0.raw <- read_excel("RUV bites_DATABASE.xlsx", sheet = 3, skip = 1)
+
+# combining next sheets of excel file
+for (i in 4:5) {
+  temp <- read_excel("RUV bites_DATABASE.xlsx", sheet = i, skip = 1)
+  df0.raw <- cbind(df0.raw, temp)
+}
+
+# Remove NA Species (= calculation cells Excel)
+df1.clean <- df0.raw[!is.na(df0.raw$Species),]
+
+# Convert to long dataframe
+df1.clean <- as.data.frame(long_panel(df1.clean, prefix = "_", begin = 1, end = 300, label_location = "end"))
+
+# Remove double name columns
+df1.clean <- select(df1.clean, -c('a':'X'))
+
+# Add Genus
+df1.clean <- as.data.frame(append(df1.clean, list(Genus = word(df1.clean$Species, 1)), after = 3))
+
+#Sort by survey
+df1.clean <- df1.clean[order(df1.clean$wave),]
+
+# GROUPING data (functional groups)
+fg <- read_excel("SpeciesList.xlsx", sheet = 1)
+fg$Diet[is.na(fg$Diet)] <- "Unknown"
+fg <- select(fg, c('Species', 'Diet', 'DietH', 'Colour'))
+
+# Merge RAW and GROUPING
+df1.clean <- inner_join(df1.clean, fg, by="Species")
+
+# META data
+meta <- read_excel("RUV bites_DATABASE.xlsx", sheet = 2)
+
+# Change location names to numbers
+meta$Location <- as.factor(ifelse(meta$Location  == 'Firefly', 1,
+                  ifelse(meta$Location  == 'Pili Pipa', 2, 
+                   ifelse(meta$Location  == 'Lower Mpunguti', 3, 
+                    ifelse(meta$Location  == 'Dolphin Point', 4, 
+                     ifelse(meta$Location  == 'Kisite', 5, 6))))))
+
+# Select relevant surveys from RAW data using criteria of META data
+df2.selex <- df1.clean[df1.clean$wave %in% c(unlist(na.omit(meta$RUV[meta$Observer == "Emilia Rizzi"]))),]
+
+# Merge RAW and META
+meta <- select(meta, c('RUV', 'Location', 'Duration.min'))
+names(df2.selex)[2] <- "RUV"
+df2.selex <- inner_join(df2.selex, meta, by = "RUV")
+
+# Correct for varying duration RUVs
+df2.selex$msBites <- df2.selex$TOTg/ df2.selex$Duration.min #msBites in g/min
+
+# SUMMARIZE
+
+# Per Location
+df3.summary.Loc_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("Location", "RUV"))
+df3.summary.Loc <- data_summary(df3.summary.Loc_temp, varname = "sum", groupnames = c("Location"))
+df3.summary.Loc <- select(df3.summary.Loc, -c(2))
+names(df3.summary.Loc)[2] <- "mean"
+
+# Per Diet
+df3.summary.Diet_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("DietH", "Location", "RUV"))
+df3.summary.Diet <- data_summary(df3.summary.Diet_temp, varname = "sum", groupnames = c("DietH", "Location"))
+df3.summary.Diet <- select(df3.summary.Diet, -c(3))
+df3.summary.Diet <- subset(df3.summary.Diet, sum > 0)
+
+# Per Family
+df3.summary.Fam_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("Family", "Location", "RUV"))
+df3.summary.Fam <- data_summary(df3.summary.Fam_temp, varname = "sum", groupnames = c("Family", "Location"))
+df3.summary.Fam <- select(df3.summary.Fam, -c(3))
+df3.summary.Fam <- subset(df3.summary.Fam, sum > 0)
+
+# Per Genus
+df3.summary.Gen_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("DietH", "Genus", "Location", "RUV", "Colour"))
+df3.summary.Gen <- data_summary(df3.summary.Gen_temp, varname = "sum", groupnames = c("DietH", "Genus", "Location", "Colour"))
+df3.summary.Gen <- select(df3.summary.Gen, -c(5))
+df3.summary.Gen <- subset(df3.summary.Gen, sum > 0)
+df3.summary.Gen$Genus[df3.summary.Gen$DietH == "Other"] <- "Other"
+df3.summary.Gen$DietH <- factor(df3.summary.Gen$DietH, levels = c("Browsers", "Grazers", "Scrapers", "Excavators", "Territorial damselfish", "Other"))
+df3.summary.Gen$Genus <- factor(df3.summary.Gen$Genus, levels = c("Calotomus", "Siganus", "Acanthurus", "Centropyge", "Ctenochaetus", "Zebrasoma", "Scarus", "Chlorurus", "Amblyglyphidodon", "Chrysiptera", "Plectroglyphidodon", "Other"))
+df3.summary.Gen <- df3.summary.Gen[order(df3.summary.Gen$DietH),]
+
+```
+
+## Post hoc and plots
+```{r SGR plot}
+
+# Plot Genus | DietH
+
+df3.summary.Gen_Colour <- data_summary(df3.summary.Gen, varname = "sum", groupnames = c("Genus", "Colour")) # Get colours per Genus
+seg_col <- c( "#474747", "#dfd20b", "#803280", "#991d1f", "#3853a4", "#11813f") # Set colour per DietH
+
+# Stacked bar graph
+p1 <-  ggplot(df3.summary.Gen, aes(x = Location, y = sum, fill = Genus)) + 
+  geom_bar(position = "stack", stat="identity", colour = "black") +
+  scale_fill_manual("Genus", values = df3.summary.Gen_Colour$Colour)+
+  theme_economist()+scale_colour_economist()+
+  labs(y = expression(paste("ms-Bites (g ", min^-1,")")))+
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold", hjust = 0.3),
+    legend.text = element_text(size = 11, face = "italic"),
+    axis.title.x = element_text(size = 14, vjust = -2),
+    axis.text.x = element_text(size = 12, face = "bold", vjust = 0.5),
+    axis.title.y = element_text( size = 14, vjust = 4),
+    axis.text.y = element_text(size = 12, face = "bold", vjust = 0.4),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#FFFFFF", size = 1)
+    ) 
+
+# Create dataframe for legend    
+dt <- data.table(x = 1, y = seq(1, 12, 1), z = factor(1:12))
+dt[ , grp := cut(as.numeric(z), breaks = c(0, 1, 4, 5, 6, 10, 12),
+                labels = c("", "Damselfish", "Excavators", "Scrapers", "Grazers", "Browsers"))]
+dt2 <- dt[ , .(x = 1, y = min(y), yend = max(y), ymid = mean(y)), by = grp]
+dt3 <- data.table(x = 1, y = unlist(dt2[ , .(y, yend)]))
+v <- 0.3 # offset
+
+# Plot legend
+p2 <- ggplot(mapping = aes(x = x, y = y)) +
+  geom_point(data = dt, size = 5)+
+  geom_segment(data = dt2, aes(x = x + v, xend = x + v, yend = yend), colour = seg_col, size = 1)+
+  geom_segment(data = dt3, aes(x = x + v, xend = x + (v - 0.1), yend = y), size = 1, 
+    colour=c("black","#dfd20b","black","black","#3853a4","#11813f","white","#dfd20b","#803280","#991d1f","#3853a4","#11813f"))+
+  geom_text(data = dt2, aes(x = x + v + 0.4, y = ymid, label = grp), colour = seg_col, size = 4, fontface = "bold", vjust = 0.3)+
+  scale_color_manual(values = "", guide = "none") +
+  scale_x_continuous(limits = c(1.2, 2))+
+  theme_void()+
+  theme(plot.margin = unit(c(0,0,0.5,0), "cm"))
+
+# Merge bar graph and legend
+plot_grid(p1, plot_grid(NULL, p2, NULL, nrow = 3, rel_heights = c(0.9, 4.5, 0.9)), rel_widths = c(6, 1))
+
+ggsave("RUV by genus and diet.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+```
+
+
+
+
+
+
+
