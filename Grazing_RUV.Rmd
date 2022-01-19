@@ -18,7 +18,7 @@ library(panelr) # Convert data from wide to long
 library(lubridate) # Date calculations
 library(rstatix)
 library(glmmTMB) # Nested beta regression
-library(DHARMa) # Nested model validation
+library(DHARMa) # glm model validation
 library(car) # ANOVA results GLM
 library(emmeans) # Post hoccing
 library(ggpubr)
@@ -27,6 +27,11 @@ library(ggthemes) # Pretty plots
 library(ggpattern) # Pretty bar plots
 library(NCmisc) # Check packages used
 library(stringr) # Get first word of string
+library(data.table)
+library(cowplot) # Plot grid
+library(nlme) # GLS
+library(car) # ANOVA results GLM
+library(lme4) #GLMM
 
 # Function to facilitate averaging dataset
 data_summary <- function(data, varname, groupnames){
@@ -92,11 +97,20 @@ meta$Location <- as.factor(ifelse(meta$Location  == 'Firefly', 1,
                     ifelse(meta$Location  == 'Dolphin Point', 4, 
                      ifelse(meta$Location  == 'Kisite', 5, 6))))))
 
+# Set Protection per Location
+meta$Protection <- as.factor(ifelse(meta$Location  == 1, "Fished",
+                  ifelse(meta$Location  == 2, "Fished", 
+                   ifelse(meta$Location  == 3, "Reserve", 
+                    ifelse(meta$Location  == 4, "Reserve", 
+                     ifelse(meta$Location  == 5, "No-take", "No-take"))))))
+
+meta$Protection <- factor(meta$Protection, ordered = TRUE, levels = c("Fished", "Reserve", "No-take"))
+
 # Select relevant surveys from RAW data using criteria of META data
 df2.selex <- df1.clean[df1.clean$wave %in% c(unlist(na.omit(meta$RUV[meta$Observer == "Emilia Rizzi"]))),]
 
 # Merge RAW and META
-meta <- select(meta, c('RUV', 'Location', 'Duration.min'))
+meta <- select(meta, c('RUV', 'Location', 'Protection', 'Duration.min'))
 names(df2.selex)[2] <- "RUV"
 df2.selex <- inner_join(df2.selex, meta, by = "RUV")
 
@@ -105,28 +119,37 @@ df2.selex$msBites <- df2.selex$TOTg/ df2.selex$Duration.min #msBites in g/min
 
 # SUMMARIZE
 
-# Per Location
-df3.summary.Loc_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("Location", "RUV"))
-df3.summary.Loc <- data_summary(df3.summary.Loc_temp, varname = "sum", groupnames = c("Location"))
-df3.summary.Loc <- select(df3.summary.Loc, -c(2))
-names(df3.summary.Loc)[2] <- "mean"
+## Per Protection
+df3.summary.Pro_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("Protection", "Location", "RUV"))
+df3.summary.Pro <- data_summary(df3.summary.Pro_temp, varname = "sum", groupnames = c("Protection"))
+df3.summary.Pro <- select(df3.summary.Pro, -c(2))
+names(df3.summary.Pro)[2] <- "mean"
+df3.summary.Pro <- df3.summary.Pro[order(df3.summary.Pro$Protection),]
 
-# Per Diet
+## Per Location
+df3.summary.Loc_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("Protection" ,"Location", "RUV"))
+df3.summary.Loc <- data_summary(df3.summary.Loc_temp, varname = "sum", groupnames = c("Protection" ,"Location"))
+df3.summary.Loc <- select(df3.summary.Loc, -c(3))
+names(df3.summary.Loc)[3] <- "mean"
+
+## Per Diet
 df3.summary.Diet_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("DietH", "Location", "RUV"))
 df3.summary.Diet <- data_summary(df3.summary.Diet_temp, varname = "sum", groupnames = c("DietH", "Location"))
 df3.summary.Diet <- select(df3.summary.Diet, -c(3))
 df3.summary.Diet <- subset(df3.summary.Diet, sum > 0)
 
-# Per Family
+## Per Family
 df3.summary.Fam_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("Family", "Location", "RUV"))
 df3.summary.Fam <- data_summary(df3.summary.Fam_temp, varname = "sum", groupnames = c("Family", "Location"))
 df3.summary.Fam <- select(df3.summary.Fam, -c(3))
 df3.summary.Fam <- subset(df3.summary.Fam, sum > 0)
 
-# Per Genus
-df3.summary.Gen_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("DietH", "Genus", "Location", "RUV", "Colour"))
-df3.summary.Gen <- data_summary(df3.summary.Gen_temp, varname = "sum", groupnames = c("DietH", "Genus", "Location", "Colour"))
-df3.summary.Gen <- select(df3.summary.Gen, -c(5))
+## Per Genus
+df3.summary.Gen_temp <- data_summary(df2.selex, varname = "msBites",
+                                     groupnames = c("DietH", "Genus", "Protection", "Location", "RUV", "Colour"))
+df3.summary.Gen <- data_summary(df3.summary.Gen_temp, varname = "sum",
+                                     groupnames = c("DietH", "Genus", "Protection", "Location", "Colour"))
+df3.summary.Gen <- select(df3.summary.Gen, -c(6))
 df3.summary.Gen <- subset(df3.summary.Gen, sum > 0)
 df3.summary.Gen$Genus[df3.summary.Gen$DietH == "Other"] <- "Other"
 df3.summary.Gen$DietH <- factor(df3.summary.Gen$DietH, levels = c("Browsers", "Grazers", "Scrapers", "Excavators", "Territorial damselfish", "Other"))
@@ -134,9 +157,90 @@ df3.summary.Gen$Genus <- factor(df3.summary.Gen$Genus, levels = c("Calotomus", "
 df3.summary.Gen <- df3.summary.Gen[order(df3.summary.Gen$DietH),]
 
 ```
+# Model selection
+```{r SGR: linear model selection}
 
-## Post hoc and plots
+# Choice for gamma glm, because data heavily skewed (log10 transformation only helped so much)
+# The few zeros in data set given second lowest value/2, as gamma doesn't allow for zeros
+# Not chosen for nested model (Location | Protection) because of singularity glmer: Protection interpreted visually
+
+# Prepare data
+df3.summary.Loc_gamma <- df3.summary.Loc_temp
+
+# Set zeros to minimum value
+df3.summary.Loc_gamma$sum[df3.summary.Loc_gamma$sum == 0] <- min(df3.summary.Loc_temp$sum[df3.summary.Loc_temp$sum>0])/2
+
+# Model
+glm1 <- glm(formula = sum ~ Location, family  = Gamma(link = "log"), data = df3.summary.Loc_gamma)
+
+# Output
+car::Anova(glm1)
+summary(glm1)
+
+```
+
+# Model validation
+```{r SGR model validation}
+
+mod <- glm1
+modOutput <- simulateResiduals(fittedModel = mod, plot = F)
+
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2))
+plotResiduals(modOutput, quantreg = T, quantiles = 0.5, rank = T, smoothScatter = F)
+testDispersion(modOutput)
+testUniformity(modOutput)
+plotResiduals(modOutput, form = df3.summary.Loc_gamma$Location)
+abline(0,0)
+plot(fitted(mod) ~ df3.summary.Loc_gamma$sum)
+par(op)
+
+```
+# Post hoc
+```{r post hoc}
+hsd <- emmeans(glm1, specs = pairwise ~ Location, adjust = "tukey")
+hsd$contrasts
+```
+
+
+# Plots
 ```{r SGR plot}
+
+# Location only
+# Post hoc letters
+sigletters.loc <- multcomp::cld(hsd$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+
+# Make order match with summary dataframe
+sigletters.loc <- sigletters.loc[order(sigletters.loc$Location),]
+sigletters.loc <- sigletters.loc %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+df3.summary.Loc <- cbind(df3.summary.Loc, siglet.loc = sigletters.loc$.group)
+
+# Plot
+ggplot(df3.summary.Loc, aes(x = Location, y = mean))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  facet_wrap(~ Protection, scales="free_x")+
+  labs(y = expression(paste("ms-Bites (g ", min^-1,")")))+
+  scale_y_continuous(limits = c (0, 800))+
+  geom_errorbar(aes(ymin=mean-(1*se), ymax=mean+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = df3.summary.Loc, aes(x=Location, y = mean + (1*se), label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  scale_x_discrete(expand = c(0, 0.7))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    axis.title.x = element_text(color="black", vjust=-2, size = 14),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 14),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
+    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3)
+    ) 
+ggsave("Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
 
 # Plot Genus | DietH
 
@@ -147,9 +251,16 @@ seg_col <- c( "#474747", "#dfd20b", "#803280", "#991d1f", "#3853a4", "#11813f") 
 p1 <-  ggplot(df3.summary.Gen, aes(x = Location, y = sum, fill = Genus)) + 
   geom_bar(position = "stack", stat="identity", colour = "black") +
   scale_fill_manual("Genus", values = df3.summary.Gen_Colour$Colour)+
+  facet_wrap(~ Protection, scales="free_x")+
   theme_economist()+scale_colour_economist()+
   labs(y = expression(paste("ms-Bites (g ", min^-1,")")))+
+  #geom_segment(data = dt2, aes(x = 1, xend = 2, yend = -1), colour = "black", size = 2)+
+  scale_x_discrete(expand = c(0, 0.7))+
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 420))+
   theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 12, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
     legend.position = "right",
     legend.title = element_text(size = 12, face = "bold", hjust = 0.3),
     legend.text = element_text(size = 11, face = "italic"),
@@ -159,7 +270,8 @@ p1 <-  ggplot(df3.summary.Gen, aes(x = Location, y = sum, fill = Genus)) +
     axis.text.y = element_text(size = 12, face = "bold", vjust = 0.4),
     panel.background = element_rect(fill = "#FCFCFC"),
     plot.background = element_rect(fill = "#FFFFFF"),
-    panel.grid.major = element_line(colour = "#FFFFFF", size = 1)
+    panel.grid.major = element_line(colour = "#FFFFFF", size = 1),
+    axis.ticks = element_blank()
     ) 
 
 # Create dataframe for legend    
@@ -180,7 +292,7 @@ p2 <- ggplot(mapping = aes(x = x, y = y)) +
   scale_color_manual(values = "", guide = "none") +
   scale_x_continuous(limits = c(1.2, 2))+
   theme_void()+
-  theme(plot.margin = unit(c(0,0,0.5,0), "cm"))
+  theme(plot.margin = unit(c(0.3,0,0.1,0), "cm"))
 
 # Merge bar graph and legend
 plot_grid(p1, plot_grid(NULL, p2, NULL, nrow = 3, rel_heights = c(0.9, 4.5, 0.9)), rel_widths = c(6, 1))
