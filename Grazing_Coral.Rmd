@@ -1,0 +1,312 @@
+
+---
+title: "HerbivoryGrazing"
+author: "Ewout Knoester"
+date: "17/01/2022"
+output: html_document
+---
+
+# Set R and packages
+```{r setup}
+
+rm(list=ls()) # Clear workspace
+knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
+
+library(readxl)
+library(tidyverse)
+library(panelr) # Convert data from wide to long
+library(lubridate) # Date calculations
+library(rstatix)
+library(glmmTMB) # Nested beta regression
+library(DHARMa) # glm model validation
+library(car) # ANOVA results GLM
+library(emmeans) # Post hoccing
+library(ggpubr)
+library(ggplot2)
+library(ggthemes) # Pretty plots
+library(ggpattern) # Pretty bar plots
+library(NCmisc) # Check packages used
+library(stringr) # Get first word of string
+library(data.table)
+library(cowplot) # Plot grid
+library(nlme) # GLS
+library(car) # ANOVA results GLM
+library(lme4) #GLMM
+
+# Function to facilitate averaging dataset
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(sum = sum(x[[col]]),
+      mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE),
+      n  = length(x[[col]]),
+      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x)))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- plyr::rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+```
+
+# Load and organize
+```{r prepare data}
+
+# Load
+df0.raw <- read.csv("Coral growth - experiments_2022-01.csv", header=T, na.strings=c(""))
+
+# Select data: Grazing experiment
+df1.clean <- subset(df0.raw, Experiment == "Spatial variation (Emilia)")
+
+# Select data: measured months
+df1.clean <- select(df1.clean, c('Experiment':'Comments_1'))
+
+# Set variables right
+df1.clean$EV_0 <- as.numeric(df1.clean$EV_0)
+df1.clean$EV_1 <- as.numeric(df1.clean$EV_1)
+
+# Change location names to numbers
+df1.clean$Location <- as.factor(ifelse(df1.clean$Location  == 'Firefly', 1,
+                  ifelse(df1.clean$Location  == 'Pilli Pipa', 2, 
+                   ifelse(df1.clean$Location  == 'Lower Mpunguti', 3, 
+                    ifelse(df1.clean$Location  == 'Dolphin Point', 4, 
+                     ifelse(df1.clean$Location  == 'Kisite', 5, 6))))))
+
+# Set Protection per Location
+df1.clean$Protection <- as.factor(ifelse(df1.clean$Location  == 1, "Fished",
+                  ifelse(df1.clean$Location  == 2, "Fished", 
+                   ifelse(df1.clean$Location  == 3, "Reserve", 
+                    ifelse(df1.clean$Location  == 4, "Reserve", 
+                     ifelse(df1.clean$Location  == 5, "No-take", "No-take"))))))
+
+df1.clean$Protection <- factor(df1.clean$Protection, ordered = TRUE, levels = c("Fished", "Reserve", "No-take"))
+
+# Omit a few missing fragments and several structures that fell down
+df1.clean <- subset(df1.clean, is.na(Cause_1) | Cause_1 != "Structure down")
+df1.clean <- subset(df1.clean, is.na(Cause_1) | Cause_1 != "Missing")
+
+# Condition subset
+df2.condition <- select(df1.clean, c('Protection', 'Location', 'Structure', 'Condition_1'))
+names(df2.condition)[names(df2.condition) == "Condition_1"] <- "Condition"
+
+# SGR: only calculated for fragments >= 80% live coral tissue
+df2.sgr<- subset(df1.clean, Condition_1 >= 80)
+
+
+# Calculate specific growth rate
+df2.sgr$SGR <- log(df2.sgr$EV_1/df2.sgr$EV_0)/ 
+                 as.numeric(as.Date(df2.sgr$Date_1, format = "%d-%b-%Y") - as.Date(df2.sgr$Date_0, format = "%d-%b-%Y")) 
+
+# SGR subset
+df2.sgr <- select(df2.sgr, c('Protection' ,'Location', 'Structure', 'SGR'))
+
+# Summaries
+## SGR
+### Per structure
+df2.sgr.structure <- data_summary(df2.sgr, varname = "SGR", groupnames = c("Protection", "Location", "Structure"))
+
+### Per location (after averaging per structure):
+df2.sgr.location <- data_summary(df2.sgr.structure, varname = "SGR", groupnames = c("Protection" ,"Location"))
+
+## Condition
+### Per structure
+df2.condition.structure <- data_summary(df2.condition, varname = "Condition", groupnames = c("Protection", "Location", "Structure"))
+
+### Per location (after averaging per structure):
+df2.condition.location <- data_summary(df2.condition.structure, varname = "Condition", groupnames = c("Protection" ,"Location"))
+
+```
+
+# Data exploration
+```{r data exploration}
+
+hist(df2.sgr$SGR)
+hist(df2.condition$Condition)
+
+
+# Get averages, split per Species, Size, Treatment and Date
+
+ggplot(df2.sgr.location, aes(x = Location, fill = Protection, y = SGR))+
+  geom_bar(stat = "identity", position = position_dodge(), na.rm = TRUE)+
+  labs(y = "SGR")+
+  geom_errorbar(aes(ymin=SGR-(2*se), ymax=SGR+(2*se)), width=.2,
+                position=position_dodge(.9))+
+  theme_light()
+
+ggplot(df2.condition.location, aes(x = Location, fill = Protection, y = Condition))+
+  geom_bar(stat = "identity", position = position_dodge(), na.rm = TRUE)+
+  labs(y = "SGR")+
+  geom_errorbar(aes(ymin=Condition-(2*se), ymax=Condition+(2*se)), width=.2,
+                position=position_dodge(.9))+
+  theme_light()
+```
+
+# Model selection
+```{r SGR: linear model selection}
+
+# SGR
+## Random factor to account for non-independence of multiple coral fragments in same nursery Structure
+lme1  <- lme(SGR ~ Location, random = ~1 | Structure, data = df2.sgr) 
+
+## Allowing for heterogeneity among Species * Size
+lme1.var1  <- lme(SGR ~ Location, random = ~1 | Structure, data = df2.sgr, weights = varIdent(form = ~1 | Location))
+
+## Output
+car::Anova(lme1.var1)
+summary(lme1.var1)
+
+# Condition
+## DATA PREP
+
+### Using averaged data per Structure to improve data structure and residuals
+
+### Transform survival (%) into fraction
+df2.condition.structure <- df2.condition.structure %>% mutate(Condition.f = Condition/100)
+
+### Re-scale so there are no 0 and 1 in the dataset
+df2.condition.structure <- df2.condition.structure %>% 
+        mutate(Condition.fc = (Condition.f * (length(Condition.f) - 1) + 0.5) / length(Condition.f))
+
+## Model
+
+### Allowing for variable precision (dispersion) using full nested model
+br.var2 <- glmmTMB(Condition.fc ~ Location, data = df2.condition.structure, 
+                 family = list(family = "beta", link = "logit"), REML = TRUE, dispformula = ~ Location)
+
+
+summary(br.var2)
+car::Anova(br.var2)
+```
+
+# Model validation
+```{r model validation}
+
+# SGR
+mod <- lme1.var1 # set model to be validated
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2)) # set layout of figure frame
+plot(resid(mod, type = "pearson") ~ fitted(mod)) # fitted vs residuals
+abline(0,0)
+hist(resid(mod, type = "pearson"), main = "") # histogram residuals
+qqnorm(resid(mod, type = "pearson")) # QQplot residuals
+plot(df2.sgr$Location, resid(mod, type = "pearson")) # residuals split over Date
+abline(0,0)
+plot(df2.sgr$Protection, resid(mod, type = "pearson")) # residuals split over Treatment
+abline(0,0)
+plot(fitted(mod) ~ df2.sgr$SGR) # response data vs fitted
+par(op)
+
+# Condition
+mod <- br.var2
+modOutput <- simulateResiduals(fittedModel = mod, plot = F)
+
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2))
+plotResiduals(modOutput, quantreg = T, quantiles = 0.5, rank = T, smoothScatter = F)
+testDispersion(modOutput)
+testUniformity(modOutput)
+plotResiduals(modOutput, form = df2.condition.structure$Location)
+plotResiduals(modOutput, form = df2.condition.structure$Protection)
+abline(0,0)
+plot(fitted(mod) ~ df2.condition.structure$Condition.fc)
+par(op)
+
+```
+# Post hoc
+```{r post hoc}
+hsd.sgr <- emmeans(lme1.var1, specs = pairwise ~ Location, adjust = "tukey")
+hsd.sgr$contrasts
+
+hsd.cond <- emmeans(br.var2, specs = pairwise ~ Location, adjust = "tukey")
+hsd.cond$contrasts
+```
+
+
+# Plots
+```{r SGR plot}
+
+# SGR plot
+# Post hoc letters
+sigletters.sgr <- multcomp::cld(hsd.sgr$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+
+# Make order match with summary dataframe
+sigletters.sgr <- sigletters.sgr[order(sigletters.sgr$Location),]
+sigletters.sgr <- sigletters.sgr %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+df2.sgr.location.fig <- cbind(df2.sgr.location, siglet.loc = sigletters.sgr$.group)
+
+# Plot
+ggplot(df2.sgr.location.fig, aes(x = Location, y = SGR))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  facet_wrap(~ Protection, scales="free_x")+
+  labs(y = expression(paste("SGR (d ", min^-1,")")))+
+  scale_y_continuous(limits = c (0, 0.017), expand = c(0,0))+
+  geom_errorbar(aes(ymin=SGR-(1*se), ymax=SGR+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = df2.sgr.location.fig, aes(x=Location, y = SGR + (1*se), label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  scale_x_discrete(expand = c(0, 0.7))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    axis.title.x = element_text(color="black", vjust=-2, size = 14),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 14),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
+    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3),
+    axis.ticks = element_blank()
+    ) 
+ggsave("SGR_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+# Condition plot
+# Post hoc letters
+sigletters.cond <- multcomp::cld(hsd.cond$emmeans, alpha = 0.05, Letters = letters, decreasing = T) # get CLD
+
+# Make order match with summary dataframe
+sigletters.cond <- sigletters.cond[order(sigletters.cond$Location),]
+sigletters.cond <- sigletters.cond %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+df2.cond.fig <- cbind(df2.condition.location, siglet.loc = sigletters.cond$.group)
+
+# Plot
+ggplot(df2.cond.fig, aes(x = Location, y = Condition))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  facet_wrap(~ Protection, scales="free_x")+
+  labs(y = expression(paste("Live coral tissue (%)")))+
+  scale_y_continuous(limits = c (0, 115), breaks = c(0, 25, 50, 75, 100), expand = c(0,0))+
+  geom_errorbar(aes(ymin=Condition-(1*se), ymax=Condition+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = df2.cond.fig, aes(x=Location, y = Condition + (1*se), label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  scale_x_discrete(expand = c(0, 0.7))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    axis.title.x = element_text(color="black", vjust=-2, size = 14),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 14),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
+    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3),
+    axis.ticks = element_blank()
+    ) 
+ggsave("Condition_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+
+```
+
+
+
+
+
+
+

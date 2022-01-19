@@ -221,7 +221,7 @@ ggplot(df3.summary.Loc, aes(x = Location, y = mean))+
   geom_bar(stat = "identity", position = position_dodge())+ 
   facet_wrap(~ Protection, scales="free_x")+
   labs(y = expression(paste("ms-Bites (g ", min^-1,")")))+
-  scale_y_continuous(limits = c (0, 800))+
+  scale_y_continuous(limits = c (0, 800), expand = c(0,0))+
   geom_errorbar(aes(ymin=mean-(1*se), ymax=mean+(1*se)), width=.2, position=position_dodge(.9))+
   geom_text(data = df3.summary.Loc, aes(x=Location, y = mean + (1*se), label = siglet.loc), 
             vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
@@ -238,9 +238,10 @@ ggplot(df3.summary.Loc, aes(x = Location, y = mean))+
     plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
     panel.background = element_rect(fill = "#FCFCFC"),
     plot.background = element_rect(fill = "#FFFFFF"),
-    panel.grid.major = element_line(colour = "#797979", size = 0.3)
-    ) 
-ggsave("Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+    panel.grid.major = element_line(colour = "#797979", size = 0.3),
+    axis.ticks = element_blank()
+    )
+ggsave("RUV_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
 
 # Plot Genus | DietH
 
