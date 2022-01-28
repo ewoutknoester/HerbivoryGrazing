@@ -7,7 +7,7 @@ output: html_document
 ---
 
 # TO DO: Check colours if BW is ok (for colour blind)
-# TO DO: MANOVA for different fouling groups?
+# TO DO: make a table for the fouling per group results (instead of graphs)
 
 # Set R and packages
 ```{r setup}
@@ -35,6 +35,7 @@ library(cowplot) # Plot grid
 library(nlme) # GLS
 library(car) # ANOVA results GLM
 library(lme4) #GLMM
+library(data.table) # long to wide
 
 # Function to facilitate averaging dataset
 data_summary <- function(data, varname, groupnames){
@@ -107,36 +108,92 @@ names(df1.clean.tot.temp)[names(df1.clean.tot.temp) == "sum"] <- "Weight.tot"
 df1.clean.tot.sum <- data_summary(df1.clean.tot.temp, varname = "Weight.tot", groupnames = c("Protection", "Location"))
 df1.clean.tot.sum <- select(df1.clean.tot.sum, -c('sum'))
 
+# Prepare data for MANOVA
+df1.clean <- tibble::rownames_to_column(df1.clean, "ID")
+df1.clean$ID <- paste(df1.clean$Location, ".", df1.clean$Structure)
+df2.wide <- dcast(setDT(df1.clean), 
+      ID ~ rowid(ID, prefix = "Foulings"),
+      value.var = "Weight")
+df2.wide <- separate(data = df2.wide, col = ID, into = c("Location", "Structure"), sep = " . ")
+names(df2.wide) <- c("Location", "Structure", "Turf.algae", "Macroalgae", "CCA", "Shelled.animals", "Other")
+
+df2.wide$Location <- factor(df2.wide$Location)
+df2.wide$Structure <- factor(df2.wide$Structure)
+df2.wide <- tibble::rownames_to_column(df2.wide, "ID")
+df2.wide <- as.data.frame(df2.wide)
+
+# Set Protection per Location
+df2.wide$Protection <- as.factor(ifelse(df2.wide$Location  == 1, "Fished",
+                  ifelse(df2.wide$Location  == 2, "Fished", 
+                   ifelse(df2.wide$Location  == 3, "Reserve", 
+                    ifelse(df2.wide$Location  == 4, "Reserve", 
+                     ifelse(df2.wide$Location  == 5, "No-take", "No-take"))))))
+df2.wide$Protection <- factor(df2.wide$Protection, ordered = TRUE, levels = c("Fished", "Reserve", "No-take"))
+
+# Get summaries per group
+df2.wide.TA <- data_summary(df2.wide, varname = c("Turf.algae"), groupnames = c("Protection", "Location"))
+df2.wide.MA <- data_summary(df2.wide, varname = c("Macroalgae"), groupnames = c("Protection", "Location"))
+df2.wide.CCA <- data_summary(df2.wide, varname = c("CCA"), groupnames = c("Protection", "Location"))
+df2.wide.SA <- data_summary(df2.wide, varname = c("Shelled.animals"), groupnames = c("Protection", "Location"))
+
+# LOG10 transformations
+df2.wide.log <- df2.wide
+df2.wide.log$Turf.algae <- log10(df2.wide$Turf.algae+0.05)
+df2.wide.log$Macroalgae <- log10(df2.wide$Macroalgae+0.05) 
+df2.wide.log$CCA <- log10(df2.wide$CCA+0.05) 
+df2.wide.log$Shelled.animals <- log10(df2.wide$Shelled.animals+0.05) 
+df2.wide.log$Other <- log10(df2.wide$Other+0.05)
+
 ```
 
 # Data exploration
 ```{r data exploration}
 
-hist(df1.clean.tot.temp$Weight.tot) # Log10 likely needed
+hist(df1.clean.tot.temp$Weight.tot) # Log10 likely needed for linear regression (total weight)
+
 
 ```
 
 # Model selection
 ```{r SGR: linear model selection}
 
-# Weight totaled over all fouling groups
+# TOTAL FOULING
+## Weight totaled over all fouling groups
 gls1  <- gls(Weight.tot ~ Location, data = df1.clean.tot.temp)
 
-# Allowing for heterogeneity among Locations improves residuals
+## Allowing for heterogeneity among Locations improves residuals
 gls1.w  <- gls(Weight.tot ~ Location, weights = varIdent(form = ~ 1|Location), data = df1.clean.tot.temp)
 
-# Log10 of response variable improves residuals
+## Log10 of response variable improves residuals
 gls1.w.log  <- gls(log10(Weight.tot) ~ Location, weights = varIdent(form = ~ 1|Location), data = df1.clean.tot.temp)
 
-
-anova(gls1.w.log)
+## Output
+Anova(gls1.w.log)
 summary(gls1.w.log)
+
+# FOULING PER GROUP
+## Couldn't fulfill assumptions for MANOVA, so try separate GLS instead
+## Fouling group 'Other' excluded because to few observations
+
+## Models
+TA <- gls(Turf.algae ~ Location, weights=varIdent(form = ~ 1 | Location), data = df2.wide.log)
+MA <- gls(Macroalgae ~ Location, weights=varIdent(form = ~ 1 | Location), data = df2.wide.log)
+CCA <- gls(CCA ~ Location, weights=varIdent(form = ~ 1 | Location), data = df2.wide.log)
+SA <- gls(Shelled.animals ~ Location, weights=varIdent(form = ~ 1 | Location), data = df2.wide.log)
+
+## Outputs
+Anova(TA)
+Anova(MA)
+Anova(CCA)
+Anova(SA)
+
 
 ```
 
 # Model validation
 ```{r model validation}
 
+# TOTAL FOULING
 mod <- gls1.w.log # set model to be validated
 op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2)) # set layout of figure frame
 plot(resid(mod, type = "pearson") ~ fitted(mod)) # fitted vs residuals
@@ -150,18 +207,73 @@ abline(0,0)
 plot(fitted(mod) ~ log10(df1.clean.tot.temp$Weight.tot)) # response data vs fitted
 par(op)
 
+# FOULING PER GROUP
+## Turf.algae
+mod <- TA # set model to be validated
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2)) # set layout of figure frame
+plot(resid(mod, type = "pearson") ~ fitted(mod)) # fitted vs residuals
+abline(0,0)
+hist(resid(mod, type = "pearson"), main = "") # histogram residuals
+qqnorm(resid(mod, type = "pearson")) # QQplot residuals
+plot(df2.wide.log$Location, resid(mod, type = "pearson")) # residuals split over Date
+abline(0,0)
+plot(fitted(mod) ~ log10(df2.wide.log$Turf.algae+0.05)) # response data vs fitted
+par(op)
+
+## Macroalgae
+mod <- MA # set model to be validated
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2)) # set layout of figure frame
+plot(resid(mod, type = "pearson") ~ fitted(mod)) # fitted vs residuals
+abline(0,0)
+hist(resid(mod, type = "pearson"), main = "") # histogram residuals
+qqnorm(resid(mod, type = "pearson")) # QQplot residuals
+plot(df2.wide.log$Location, resid(mod, type = "pearson")) # residuals split over Date
+abline(0,0)
+plot(fitted(mod) ~ log10(df2.wide.log$Macroalgae+0.05)) # response data vs fitted
+par(op)
+
+## CCA
+mod <- CCA # set model to be validated
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2)) # set layout of figure frame
+plot(resid(mod, type = "pearson") ~ fitted(mod)) # fitted vs residuals
+abline(0,0)
+hist(resid(mod, type = "pearson"), main = "") # histogram residuals
+qqnorm(resid(mod, type = "pearson")) # QQplot residuals
+plot(df2.wide.log$Location, resid(mod, type = "pearson")) # residuals split over Date
+abline(0,0)
+plot(fitted(mod) ~ log10(df2.wide.log$CCA+0.05)) # response data vs fitted
+par(op)
+
+## Shelled.animals
+mod <- TA # set model to be validated
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2)) # set layout of figure frame
+plot(resid(mod, type = "pearson") ~ fitted(mod)) # fitted vs residuals
+abline(0,0)
+hist(resid(mod, type = "pearson"), main = "") # histogram residuals
+qqnorm(resid(mod, type = "pearson")) # QQplot residuals
+plot(df2.wide.log$Location, resid(mod, type = "pearson")) # residuals split over Date
+abline(0,0)
+plot(fitted(mod) ~ log10(df2.wide.log$Shelled.animals+0.05)) # response data vs fitted
+par(op)
 
 ```
 # Post hoc
 ```{r post hoc}
+
+# TOTAL FOULING
 hsd <- emmeans(gls1.w.log, specs = pairwise ~ Location, adjust = "tukey", type = "response")
-hsd$contrasts
+
+# FOULING PER GROUP
+hsd.TA <- emmeans(TA, specs = pairwise ~ Location, adjust = "tukey", type = "response")
+hsd.MA <- emmeans(MA, specs = pairwise ~ Location, adjust = "tukey", type = "response")
+hsd.CCA <- emmeans(CCA, specs = pairwise ~ Location, adjust = "tukey", type = "response")
+hsd.SA <- emmeans(SA, specs = pairwise ~ Location, adjust = "tukey", type = "response")
 
 ```
 
 
-# Plots
-```{r plots}
+# TOTAL Plots
+```{r total plots}
 
 # Location only
 # Post hoc letters
@@ -199,7 +311,7 @@ ggplot(df3.summary.Loc, aes(x = Location, y = Weight.tot))+
     panel.grid.major = element_line(colour = "#797979", size = 0.3),
     axis.ticks = element_blank()
     )
-ggsave("Fouling_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+ggsave("Fouling_Total_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
 
 # Plot Location | Fouling
 
@@ -230,7 +342,7 @@ ggplot(df1.clean.sum, aes(x = Location, y = Weight, fill = Fouling)) +
     axis.ticks = element_blank()
     ) 
 
-ggsave("Fouling_Fouling.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+ggsave("Fouling_Stacked_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
 
 # Stacked bar graph + errors
 
@@ -276,10 +388,165 @@ ggplot(df1.clean.sum.se) +
     panel.grid.major = element_line(colour = "#FFFFFF", size = 1),
     axis.ticks = element_blank()
     ) 
-ggsave("Fouling_Fouling_SE.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+ggsave("Fouling_Stacked_Location_SE.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
 
 ```
+# PER GROUP Plots
+```{r per group plots}
 
+# Turf.algae
+# Post hoc letters
+sigletters.TA <- multcomp::cld(hsd.TA$emmeans, alpha = 0.05, Letters = letters, reversed = TRUE) # get CLD
+
+# Make order match with summary dataframe
+sigletters.TA <- sigletters.TA[order(sigletters.TA$Location),]
+sigletters.TA <- sigletters.TA %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+df3.summary.TA <- cbind(df2.wide.TA, siglet.loc = sigletters.TA$.group)
+
+# Plot
+ggplot(df3.summary.TA, aes(x = Location, y = Turf.algae))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  facet_wrap(~ Protection, scales="free_x")+
+  labs(y = expression(paste("Turf algae (g)")))+
+  scale_y_continuous(limits = c(0, 15), expand = c(0,0))+
+  geom_errorbar(aes(ymin=Turf.algae-(1*se), ymax=Turf.algae+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = df3.summary.TA, aes(x=Location, y = Turf.algae + (1*se), label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  scale_x_discrete(expand = c(0, 0.7))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    axis.title.x = element_text(color="black", vjust=-2, size = 14),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 14),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
+    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3),
+    axis.ticks = element_blank()
+    )
+ggsave("Fouling_Turf_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+# Macroalgae
+# Post hoc letters
+sigletters.MA <- multcomp::cld(hsd.MA$emmeans, alpha = 0.05, Letters = letters, reversed = TRUE) # get CLD
+
+# Make order match with summary dataframe
+sigletters.MA <- sigletters.MA[order(sigletters.MA$Location),]
+sigletters.MA <- sigletters.MA %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+df3.summary.MA <- cbind(df2.wide.MA, siglet.loc = sigletters.MA$.group)
+
+# Plot
+ggplot(df3.summary.MA, aes(x = Location, y = Macroalgae))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  facet_wrap(~ Protection, scales="free_x")+
+  labs(y = expression(paste("Macroalgae (g)")))+
+  scale_y_continuous(limits = c(0, 28), expand = c(0,0))+
+  geom_errorbar(aes(ymin=Macroalgae-(1*se), ymax=Macroalgae+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = df3.summary.MA, aes(x=Location, y = Macroalgae + (1*se), label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  scale_x_discrete(expand = c(0, 0.7))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    axis.title.x = element_text(color="black", vjust=-2, size = 14),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 14),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
+    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3),
+    axis.ticks = element_blank()
+    )
+ggsave("Fouling_Macroalgae_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+# CCA
+# Post hoc letters
+sigletters.CCA <- multcomp::cld(hsd.CCA$emmeans, alpha = 0.05, Letters = letters, reversed = FALSE) # get CLD
+
+# Make order match with summary dataframe
+sigletters.CCA <- sigletters.CCA[order(sigletters.CCA$Location),]
+sigletters.CCA <- sigletters.CCA %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+df3.summary.CCA <- cbind(df2.wide.CCA, siglet.loc = sigletters.CCA$.group)
+
+# Plot
+ggplot(df3.summary.CCA, aes(x = Location, y = CCA))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  facet_wrap(~ Protection, scales="free_x")+
+  labs(y = expression(paste("CCA (g)")))+
+  scale_y_continuous(limits = c(0, 12), expand = c(0,0))+
+  geom_errorbar(aes(ymin=CCA-(1*se), ymax=CCA+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = df3.summary.CCA, aes(x=Location, y = CCA + (1*se), label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  scale_x_discrete(expand = c(0, 0.7))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    axis.title.x = element_text(color="black", vjust=-2, size = 14),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 14),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
+    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3),
+    axis.ticks = element_blank()
+    )
+ggsave("Fouling_CCA_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+# Shelled.animals
+# Post hoc letters
+sigletters.SA <- multcomp::cld(hsd.SA$emmeans, alpha = 0.05, Letters = letters, reversed = TRUE) # get CLD
+
+# Make order match with summary dataframe
+sigletters.SA <- sigletters.SA[order(sigletters.SA$Location),]
+sigletters.SA <- sigletters.SA %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+df3.summary.SA <- cbind(df2.wide.SA, siglet.loc = sigletters.SA$.group)
+
+# Plot
+ggplot(df3.summary.SA, aes(x = Location, y = Shelled.animals))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  facet_wrap(~ Protection, scales="free_x")+
+  labs(y = expression(paste("Shelled animals (g)")))+
+  scale_y_continuous(limits = c(0, 28), expand = c(0,0))+
+  geom_errorbar(aes(ymin=Shelled.animals-(1*se), ymax=Shelled.animals+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = df3.summary.SA, aes(x=Location, y = Shelled.animals + (1*se), label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  scale_x_discrete(expand = c(0, 0.7))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    axis.title.x = element_text(color="black", vjust=-2, size = 14),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 14),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
+    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3),
+    axis.ticks = element_blank()
+    )
+ggsave("Fouling_Shelled_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+```
 
 
 
