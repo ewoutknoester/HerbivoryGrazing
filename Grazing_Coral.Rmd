@@ -6,6 +6,8 @@ date: "17/01/2022"
 output: html_document
 ---
 
+# TO DO: inspect in raw data/pics all the dead fragments (esp in reserves), because these seem to skew data and might likely be explained by hanging in the sand for some time (as all fragments are either completely healthy or dead)
+
 # Set R and packages
 ```{r setup}
 

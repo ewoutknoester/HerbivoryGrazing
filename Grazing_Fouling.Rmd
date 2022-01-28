@@ -1,0 +1,286 @@
+
+---
+title: "HerbivoryGrazing"
+author: "Ewout Knoester"
+date: "17/01/2022"
+output: html_document
+---
+
+# TO DO: Check colours if BW is ok (for colour blind)
+# TO DO: MANOVA for different fouling groups?
+
+# Set R and packages
+```{r setup}
+
+rm(list=ls()) # Clear workspace
+knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
+
+library(readxl)
+library(tidyverse)
+library(panelr) # Convert data from wide to long
+library(lubridate) # Date calculations
+library(rstatix)
+library(glmmTMB) # Nested beta regression
+library(DHARMa) # glm model validation
+library(car) # ANOVA results GLM
+library(emmeans) # Post hoccing
+library(ggpubr)
+library(ggplot2)
+library(ggthemes) # Pretty plots
+library(ggpattern) # Pretty bar plots
+library(NCmisc) # Check packages used
+library(stringr) # Get first word of string
+library(data.table)
+library(cowplot) # Plot grid
+library(nlme) # GLS
+library(car) # ANOVA results GLM
+library(lme4) #GLMM
+
+# Function to facilitate averaging dataset
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(sum = sum(x[[col]]),
+      mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE),
+      n  = length(x[[col]]),
+      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x)))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- plyr::rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+```
+
+# Load and organize
+```{r prepare data}
+
+# Load
+df0.raw <- read.csv("Fouling_2022-01.csv", header=T, na.strings=c(""))
+
+# Select data: Grazing experiment
+df1.clean <- subset(df0.raw, Experiment == "Spatial variation")
+
+# Select relevant columns
+df1.clean <- select(df1.clean, c('Location', 'Structure', 'Fouling', 'Difference.g'))
+
+names(df1.clean)[names(df1.clean) == "Difference.g"] <- "Weight"
+
+# Change location names to numbers
+df1.clean$Location <- as.factor(ifelse(df1.clean$Location  == 'Firefly', 1,
+                  ifelse(df1.clean$Location  == 'Pilli Pipa', 2, 
+                   ifelse(df1.clean$Location  == 'Lower Mpunguti', 3, 
+                    ifelse(df1.clean$Location  == 'Dolphin Point', 4, 
+                     ifelse(df1.clean$Location  == 'Kisite', 5, 6))))))
+
+# Set Protection per Location
+df1.clean$Protection <- as.factor(ifelse(df1.clean$Location  == 1, "Fished",
+                  ifelse(df1.clean$Location  == 2, "Fished", 
+                   ifelse(df1.clean$Location  == 3, "Reserve", 
+                    ifelse(df1.clean$Location  == 4, "Reserve", 
+                     ifelse(df1.clean$Location  == 5, "No-take", "No-take"))))))
+df1.clean$Protection <- factor(df1.clean$Protection, ordered = TRUE, levels = c("Fished", "Reserve", "No-take"))
+
+# Set data types right
+df1.clean$Fouling <- factor(df1.clean$Fouling)
+df1.clean$Structure <- factor(df1.clean$Structure)
+
+# Pool some fouling groups
+levels(df1.clean$Fouling) <- c("Shelled animals", "Macroalgae", "CCA", "Turf algae", "Macroalgae", "Shelled animals", "Other", "Other", "Other", "Other", "Turf algae")
+df1.clean$Fouling <- factor(df1.clean$Fouling, levels = c("Turf algae", "Macroalgae", "CCA", "Shelled animals", "Other"))
+
+# Select summed data to get proper averages
+df1.clean <- data_summary(df1.clean, varname = "Weight", groupnames = c("Protection", "Location", "Structure", "Fouling"))
+df1.clean <- select(df1.clean, c('Protection':'sum'))
+names(df1.clean)[names(df1.clean) == "sum"] <- "Weight"
+
+# Get summary per Fouling
+df1.clean.sum <- data_summary(df1.clean, varname = "Weight", groupnames = c("Protection", "Location", "Fouling"))
+
+# Get summary of total Fouling
+df1.clean.tot.temp <- data_summary(df1.clean, varname = "Weight", groupnames = c("Protection", "Location","Structure"))
+df1.clean.tot.temp <- select(df1.clean.tot.temp, c('Protection':'sum'))
+names(df1.clean.tot.temp)[names(df1.clean.tot.temp) == "sum"] <- "Weight.tot"
+
+df1.clean.tot.sum <- data_summary(df1.clean.tot.temp, varname = "Weight.tot", groupnames = c("Protection", "Location"))
+df1.clean.tot.sum <- select(df1.clean.tot.sum, -c('sum'))
+
+```
+
+# Data exploration
+```{r data exploration}
+
+hist(df1.clean.tot.temp$Weight.tot) # Log10 likely needed
+
+```
+
+# Model selection
+```{r SGR: linear model selection}
+
+# Weight totaled over all fouling groups
+gls1  <- gls(Weight.tot ~ Location, data = df1.clean.tot.temp)
+
+# Allowing for heterogeneity among Locations improves residuals
+gls1.w  <- gls(Weight.tot ~ Location, weights = varIdent(form = ~ 1|Location), data = df1.clean.tot.temp)
+
+# Log10 of response variable improves residuals
+gls1.w.log  <- gls(log10(Weight.tot) ~ Location, weights = varIdent(form = ~ 1|Location), data = df1.clean.tot.temp)
+
+
+anova(gls1.w.log)
+summary(gls1.w.log)
+
+```
+
+# Model validation
+```{r model validation}
+
+mod <- gls1.w.log # set model to be validated
+op <- par(mfrow = c(2, 3), mar = c(5, 4, 1, 2)) # set layout of figure frame
+plot(resid(mod, type = "pearson") ~ fitted(mod)) # fitted vs residuals
+abline(0,0)
+hist(resid(mod, type = "pearson"), main = "") # histogram residuals
+qqnorm(resid(mod, type = "pearson")) # QQplot residuals
+plot(df1.clean.tot.temp$Location, resid(mod, type = "pearson")) # residuals split over Date
+abline(0,0)
+plot(df1.clean.tot.temp$Protection, resid(mod, type = "pearson")) # residuals split over Treatment
+abline(0,0)
+plot(fitted(mod) ~ log10(df1.clean.tot.temp$Weight.tot)) # response data vs fitted
+par(op)
+
+
+```
+# Post hoc
+```{r post hoc}
+hsd <- emmeans(gls1.w.log, specs = pairwise ~ Location, adjust = "tukey", type = "response")
+hsd$contrasts
+
+```
+
+
+# Plots
+```{r plots}
+
+# Location only
+# Post hoc letters
+sigletters.loc <- multcomp::cld(hsd$emmeans, alpha = 0.05, Letters = letters, reversed = TRUE) # get CLD
+
+# Make order match with summary dataframe
+sigletters.loc <- sigletters.loc[order(sigletters.loc$Location),]
+sigletters.loc <- sigletters.loc %>% mutate(.group = str_squish(.group)) # remove white spaces
+
+# Merge sig.letter dataframe into the summary dataframe
+df3.summary.Loc <- cbind(df1.clean.tot.sum, siglet.loc = sigletters.loc$.group)
+
+# Plot
+ggplot(df3.summary.Loc, aes(x = Location, y = Weight.tot))+
+  geom_bar(stat = "identity", position = position_dodge())+ 
+  facet_wrap(~ Protection, scales="free_x")+
+  labs(y = expression(paste("Total fouling (g)")))+
+  scale_y_continuous(limits = c (0, 80), expand = c(0,0))+
+  geom_errorbar(aes(ymin=Weight.tot-(1*se), ymax=Weight.tot+(1*se)), width=.2, position=position_dodge(.9))+
+  geom_text(data = df3.summary.Loc, aes(x=Location, y = Weight.tot + (1*se), label = siglet.loc), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  scale_x_discrete(expand = c(0, 0.7))+
+  theme_economist()+scale_colour_economist()+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    axis.title.x = element_text(color="black", vjust=-2, size = 14),
+    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
+    axis.title.y = element_text(color="black" , vjust=4, size = 14),
+    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
+    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#797979", size = 0.3),
+    axis.ticks = element_blank()
+    )
+ggsave("Fouling_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+# Plot Location | Fouling
+
+# Stacked bar graph
+ggplot(df1.clean.sum, aes(x = Location, y = Weight, fill = Fouling)) + 
+  geom_bar(position = "stack", stat="identity", colour = "black") +
+  scale_fill_manual("Fouling", values = c("#93ED8A", "#0C8900", "#FFCAFB", "#BFBFBF", "#363636"))+
+  facet_wrap(~ Protection, scales="free_x")+
+  theme_economist()+scale_colour_economist()+
+  labs(y = expression(paste("Fouling (g)")))+
+  #geom_segment(data = dt2, aes(x = 1, xend = 2, yend = -1), colour = "black", size = 2)+
+  scale_x_discrete(expand = c(0, 0.7))+
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 59))+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 12, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold", hjust = 0.3),
+    legend.text = element_text(size = 11, face = "italic"),
+    axis.title.x = element_text(size = 14, vjust = -2),
+    axis.text.x = element_text(size = 12, face = "bold", vjust = 0.5),
+    axis.title.y = element_text( size = 14, vjust = 4),
+    axis.text.y = element_text(size = 12, face = "bold", vjust = 0.4),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#FFFFFF", size = 1),
+    axis.ticks = element_blank()
+    ) 
+
+ggsave("Fouling_Fouling.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+# Stacked bar graph + errors
+
+# Merge datas
+df1.clean.sum <- df1.clean.sum[order(df1.clean.sum$Location),]
+df1.clean.sum <- df1.clean.sum[order(df1.clean.sum$Fouling),]
+df1.clean.sum.se <- cbind(df1.clean.sum, se.tot = df3.summary.Loc$se)
+df1.clean.sum.se <- cbind(df1.clean.sum.se, Weight.tot = df3.summary.Loc$Weight.tot)
+df1.clean.sum.se <- cbind(df1.clean.sum.se, siglet = df3.summary.Loc$siglet.loc)
+df1.clean.sum.se$se.tot <- as.numeric(ifelse(df1.clean.sum.se$Fouling  != 'CCA', "", df1.clean.sum.se$se.tot))
+df1.clean.sum.se$Weight.tot <- as.numeric(ifelse(df1.clean.sum.se$Fouling  != 'CCA', "", df1.clean.sum.se$Weight.tot))
+df1.clean.sum.se$siglet <- ifelse(df1.clean.sum.se$Fouling  != 'CCA', "", df1.clean.sum.se$siglet)
+
+
+# Plot
+ggplot(df1.clean.sum.se) +  
+  geom_bar(position = "stack", stat = "identity", aes(x = Location, y = Weight, fill=Fouling))+
+  geom_errorbar(aes(x = Location, ymin=Weight.tot, ymax=Weight.tot+(1*se.tot)), width=.2, size = 1, position=position_dodge(.9))+
+  geom_text(data = df1.clean.sum.se, aes(x=Location, y = Weight.tot + (1*se.tot), label = siglet), 
+            vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
+  geom_bar(data=df1.clean.sum.se[(df1.clean.sum.se$Fouling=="CCA"),],
+           stat = "identity", aes(x = Location, y = Weight.tot, fill=Fouling), alpha=0, size=1, color="black")+
+  scale_fill_manual("Fouling", values = c("#93ED8A", "#0C8900", "#FFCAFB", "#BFBFBF", "#363636"))+
+  facet_wrap(~ Protection, scales="free_x")+
+  theme_economist()+scale_colour_economist()+
+  labs(y = expression(paste("Fouling (g)")))+
+  #geom_segment(data = dt2, aes(x = 1, xend = 2, yend = -1), colour = "black", size = 2)+
+  scale_x_discrete(expand = c(0, 0.7))+
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 70))+
+  theme(
+    panel.margin.y = unit(0, "cm"),
+    strip.text.x = element_text(size = 12, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
+    strip.background = element_blank(),
+    legend.position = "right",
+    legend.title = element_text(size = 12, face = "bold", hjust = 0.3),
+    legend.text = element_text(size = 11, face = "italic"),
+    axis.title.x = element_text(size = 14, vjust = -2),
+    axis.text.x = element_text(size = 12, face = "bold", vjust = 0.5),
+    axis.title.y = element_text( size = 14, vjust = 4),
+    axis.text.y = element_text(size = 12, face = "bold", vjust = 0.4),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    panel.grid.major = element_line(colour = "#FFFFFF", size = 1),
+    axis.ticks = element_blank()
+    ) 
+ggsave("Fouling_Fouling_SE.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+```
+
+
+
+
+

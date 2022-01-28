@@ -6,6 +6,10 @@ date: "17/01/2022"
 output: html_document
 ---
 
+# Swap grazers and browsers is graph
+# TO DO: add (error bars +) letters to stacked bar graphs & how it looks
+
+
 # Set R and packages
 ```{r setup}
 
