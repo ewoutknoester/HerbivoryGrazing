@@ -1,166 +1,209 @@
 
 ---
-title: "HerbivoryGrazing"
+title: "Grazing_RUV"
 author: "Ewout Knoester"
 date: "17/01/2022"
 output: html_document
 ---
-
-# Swap grazers and browsers is graph
-# TO DO: add (error bars +) letters to stacked bar graphs & how it looks
-
 
 # Set R and packages
 ```{r setup}
 
 rm(list=ls()) # Clear workspace
 knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
+options(scipen = 100) # Remove scientific notation
 
-library(readxl)
-library(tidyverse)
-library(panelr) # Convert data from wide to long
-library(lubridate) # Date calculations
-library(rstatix)
-library(glmmTMB) # Nested beta regression
-library(DHARMa) # glm model validation
 library(car) # ANOVA results GLM
-library(emmeans) # Post hoccing
-library(ggpubr)
-library(ggplot2)
-library(ggthemes) # Pretty plots
-library(ggpattern) # Pretty bar plots
-library(NCmisc) # Check packages used
-library(stringr) # Get first word of string
-library(data.table)
 library(cowplot) # Plot grid
-library(nlme) # GLS
-library(car) # ANOVA results GLM
-library(lme4) #GLMM
+library(data.table) # Easy data frame handling
+library(DHARMa) # glm model validation
+library(emmeans) # Post hoccing
+library(flextable) # layout table
+library(ggthemes) # Pretty plots
+library(NCmisc) # Check packages used
+library(officer) # Move table into word
+library(panelr) # Convert data from wide to long
+library(readxl)
+library(rstatix)
+library(tidyverse) # dplyr, ggplot2, stringr
+library(writexl)
 
 # Function to facilitate averaging dataset
 data_summary <- function(data, varname, groupnames){
   require(plyr)
   summary_func <- function(x, col){
     c(sum = sum(x[[col]]),
-      mean = mean(x[[col]], na.rm=TRUE),
+      mean = base::mean(x[[col]], na.rm=TRUE),
       sd = sd(x[[col]], na.rm=TRUE),
       n  = length(x[[col]]),
-      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x)))
+      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x[[col]])))
   }
   data_sum<-ddply(data, groupnames, .fun=summary_func,
                   varname)
-  data_sum <- plyr::rename(data_sum, c("mean" = varname))
+  data_sum <- plyr::rename(data_sum, c("mean" = paste(varname, ".mean", sep = ""),
+                                       "sum" = paste(varname, ".sum", sep = "")))
  return(data_sum)
 }
 
 ```
 
-# Load and organize
+# Data selection (preparing dataset for archiving & sharing)
 ```{r prepare data}
 
 # RAW data
-# load first xls sheet
-df0.raw <- read_excel("RUV bites_DATABASE.xlsx", sheet = 3, skip = 1)
+## load first Excel sheet
+df0.raw <- read_excel("Raw data/RUV bites_DATABASE_2022-02.xlsx", sheet = 3, skip = 1)
 
-# combining next sheets of excel file
+## combining next sheets of Excel file
 for (i in 4:5) {
-  temp <- read_excel("RUV bites_DATABASE.xlsx", sheet = i, skip = 1)
+  temp <- read_excel("Raw data/RUV bites_DATABASE_2022-02.xlsx", sheet = i, skip = 1)
   df0.raw <- cbind(df0.raw, temp)
 }
 
-# Remove NA Species (= calculation cells Excel)
+# Cleaning data
+## Remove NA Species (= calculation cells Excel)
 df1.clean <- df0.raw[!is.na(df0.raw$Species),]
 
-# Convert to long dataframe
+## Convert to long dataframe
 df1.clean <- as.data.frame(long_panel(df1.clean, prefix = "_", begin = 1, end = 300, label_location = "end"))
 
-# Remove double name columns
-df1.clean <- select(df1.clean, -c('a':'X'))
+## Remove double name columns
+df1.clean <- dplyr::select(df1.clean, -c('a':'X'))
 
-# Add Genus
+## Add Genus
 df1.clean <- as.data.frame(append(df1.clean, list(Genus = word(df1.clean$Species, 1)), after = 3))
 
-#Sort by survey
+##Sort by survey
 df1.clean <- df1.clean[order(df1.clean$wave),]
 
 # GROUPING data (functional groups)
-fg <- read_excel("SpeciesList.xlsx", sheet = 1)
-fg$Diet[is.na(fg$Diet)] <- "Unknown"
-fg <- select(fg, c('Species', 'Diet', 'DietH', 'Colour'))
+## Load Excel
+fg <- read_excel("Raw data/SpeciesList_2022-06.xlsx", sheet = 1)
+fg <- dplyr::select(fg, c('Species', 'Diet', 'DietH'))
 
-# Merge RAW and GROUPING
-df1.clean <- inner_join(df1.clean, fg, by="Species")
+# MERGE RAW and GROUPING
+df1.clean <- left_join(df1.clean, fg, by="Species")
 
 # META data
-meta <- read_excel("RUV bites_DATABASE.xlsx", sheet = 2)
+## Load Excel
+meta <- read_excel("Raw data/RUV bites_DATABASE_2022-02.xlsx", sheet = 2)
 
-# Change location names to numbers
+## Cleaning META data
+### Change location names to numbers
 meta$Location <- as.factor(ifelse(meta$Location  == 'Firefly', 1,
                   ifelse(meta$Location  == 'Pili Pipa', 2, 
                    ifelse(meta$Location  == 'Lower Mpunguti', 3, 
                     ifelse(meta$Location  == 'Dolphin Point', 4, 
                      ifelse(meta$Location  == 'Kisite', 5, 6))))))
 
-# Set Protection per Location
+### Set Protection per Location
 meta$Protection <- as.factor(ifelse(meta$Location  == 1, "Fished",
                   ifelse(meta$Location  == 2, "Fished", 
                    ifelse(meta$Location  == 3, "Reserve", 
                     ifelse(meta$Location  == 4, "Reserve", 
                      ifelse(meta$Location  == 5, "No-take", "No-take"))))))
 
-meta$Protection <- factor(meta$Protection, ordered = TRUE, levels = c("Fished", "Reserve", "No-take"))
-
-# Select relevant surveys from RAW data using criteria of META data
+# Select relevant surveys (i.e. Observer = Emilia) from RAW data using criteria of META data
 df2.selex <- df1.clean[df1.clean$wave %in% c(unlist(na.omit(meta$RUV[meta$Observer == "Emilia Rizzi"]))),]
 
 # Merge RAW and META
-meta <- select(meta, c('RUV', 'Location', 'Protection', 'Duration.min'))
-names(df2.selex)[2] <- "RUV"
-df2.selex <- inner_join(df2.selex, meta, by = "RUV")
+meta <- dplyr::select(meta, c('RUV', 'Location', 'Protection', 'Duration.min')) # Select relevant META data
+names(df2.selex)[2] <- "RUV" # Rename column so both data frames have now an RUV ID columns
+df2.selex <- left_join(df2.selex, meta, by = "RUV") # Merge by RUV number
 
-# Correct for varying duration RUVs
-df2.selex$msBites <- df2.selex$TOTg/ df2.selex$Duration.min #msBites in g/min
-
-# SUMMARIZE
-
-## Per Protection
-df3.summary.Pro_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("Protection", "Location", "RUV"))
-df3.summary.Pro <- data_summary(df3.summary.Pro_temp, varname = "sum", groupnames = c("Protection"))
-df3.summary.Pro <- select(df3.summary.Pro, -c(2))
-names(df3.summary.Pro)[2] <- "mean"
-df3.summary.Pro <- df3.summary.Pro[order(df3.summary.Pro$Protection),]
-
-## Per Location
-df3.summary.Loc_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("Protection" ,"Location", "RUV"))
-df3.summary.Loc <- data_summary(df3.summary.Loc_temp, varname = "sum", groupnames = c("Protection" ,"Location"))
-df3.summary.Loc <- select(df3.summary.Loc, -c(3))
-names(df3.summary.Loc)[3] <- "mean"
-
-## Per Diet
-df3.summary.Diet_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("DietH", "Location", "RUV"))
-df3.summary.Diet <- data_summary(df3.summary.Diet_temp, varname = "sum", groupnames = c("DietH", "Location"))
-df3.summary.Diet <- select(df3.summary.Diet, -c(3))
-df3.summary.Diet <- subset(df3.summary.Diet, sum > 0)
-
-## Per Family
-df3.summary.Fam_temp <- data_summary(df2.selex, varname = "msBites", groupnames = c("Family", "Location", "RUV"))
-df3.summary.Fam <- data_summary(df3.summary.Fam_temp, varname = "sum", groupnames = c("Family", "Location"))
-df3.summary.Fam <- select(df3.summary.Fam, -c(3))
-df3.summary.Fam <- subset(df3.summary.Fam, sum > 0)
-
-## Per Genus
-df3.summary.Gen_temp <- data_summary(df2.selex, varname = "msBites",
-                                     groupnames = c("DietH", "Genus", "Protection", "Location", "RUV", "Colour"))
-df3.summary.Gen <- data_summary(df3.summary.Gen_temp, varname = "sum",
-                                     groupnames = c("DietH", "Genus", "Protection", "Location", "Colour"))
-df3.summary.Gen <- select(df3.summary.Gen, -c(6))
-df3.summary.Gen <- subset(df3.summary.Gen, sum > 0)
-df3.summary.Gen$Genus[df3.summary.Gen$DietH == "Other"] <- "Other"
-df3.summary.Gen$DietH <- factor(df3.summary.Gen$DietH, levels = c("Browsers", "Grazers", "Scrapers", "Excavators", "Territorial damselfish", "Other"))
-df3.summary.Gen$Genus <- factor(df3.summary.Gen$Genus, levels = c("Calotomus", "Siganus", "Acanthurus", "Centropyge", "Ctenochaetus", "Zebrasoma", "Scarus", "Chlorurus", "Amblyglyphidodon", "Chrysiptera", "Plectroglyphidodon", "Other"))
-df3.summary.Gen <- df3.summary.Gen[order(df3.summary.Gen$DietH),]
+# EXPORT DATA SELECTION
+write_xlsx(df2.selex,"RUV bites_Herbivory grazing.xlsx")
 
 ```
+# Data cleaning
+```{r data loading}
+
+df0.clean <- read_excel("RUV bites_Herbivory grazing.xlsx", sheet = 1)
+
+### Order Protection
+df0.clean$Protection <- factor(df0.clean$Protection, ordered = TRUE, levels = c("Fished", "Reserve", "No-take"))
+df0.clean$Location <- as.factor(df0.clean$Location)
+
+# Correct for varying duration RUVs by dividing by RUV length
+df0.clean$msBites <- df0.clean$TOTg/ df0.clean$Duration.min #msBites in g/min
+
+# Standardize bites from (g/min) to (kg/hour)
+df0.clean$msBites <- df0.clean$msBites * 60/1000
+
+# SUMMARIZING
+
+## Get sum of all bites by all species per RUV
+df3.summary.RUV <- data_summary(df0.clean, varname = "msBites", groupnames = c("Protection", "Location", "RUV"))
+df3.summary.RUV <- dplyr::select(df3.summary.RUV, -c('msBites.mean', 'sd', 'n', 'se')) # Remove meaningless columns
+
+## --- Per Protection ---
+### Get average of this sum per Protection
+df3.summary.Pro <- data_summary(df3.summary.RUV, varname = "msBites.sum", groupnames = c("Protection"))
+df3.summary.Pro <- dplyr::select(df3.summary.Pro, -c(msBites.sum.sum)) # Remove the sum of the sum
+
+## --- Per Location ---
+### Get average of RUVs per Location
+df3.summary.Loc <- data_summary(df3.summary.RUV, varname = "msBites.sum", groupnames = c("Protection" ,"Location"))
+df3.summary.Loc <- dplyr::select(df3.summary.Loc, -c(msBites.sum.sum)) # Remove the sum of the sum
+
+## --- Per Diet ---
+### Get the sum of all bites by all species of each functional group per RUV
+df3.summary.Diet <- data_summary(df0.clean, varname = "msBites", groupnames = c("DietH", "Location", "RUV"))
+### Get average of this sum per Functional group per Location
+df3.summary.Diet <- data_summary(df3.summary.Diet, varname = "msBites.sum", groupnames = c("DietH", "Location"))
+df3.summary.Diet <- dplyr::select(df3.summary.Diet, -c('msBites.sum.sum', 'sd', 'n', 'se')) # Remove unused columns
+df3.summary.Diet <- subset(df3.summary.Diet, msBites.sum.mean > 0) # Only select combinations with observations (positive values)
+
+## --- Per Genus ---
+### Get the sum of all bites by all species of each Genus per RUV
+df3.summary.Gen <- data_summary(df0.clean, varname="msBites", groupnames=c("DietH", "Genus", "Protection", "Location", "RUV"))
+### Get average of this sum per Genus per Location
+df3.summary.Gen <- data_summary(df3.summary.Gen, varname="msBites.sum", groupnames=c("DietH", "Genus", "Protection", "Location"))
+df3.summary.Gen <- subset(df3.summary.Gen, msBites.sum.mean > 0) # Only select combinations with observations (positive values)
+# Group genera that are not nominally known as Herbivores as "Other" because not of interest (bites likely targeting inverts)
+df3.summary.Gen$Genus[df3.summary.Gen$DietH == "Other"] <- "Other"
+# Average again to merge all Others into one Other
+df3.summary.Gen <- data_summary(df3.summary.Gen, varname="msBites.sum.mean", groupnames=c("DietH", "Genus", "Protection", "Location"))
+df3.summary.Gen <- dplyr::select(df3.summary.Gen, -c('msBites.sum.mean.mean','sd', 'n', 'se')) # Remove meaningless columns
+names(df3.summary.Gen)[names(df3.summary.Gen) == "msBites.sum.mean.sum"] <- "msBites.sum.mean" # Rename because summing was just used to pool the category 'Others'
+
+### Select genera that have a substantial amount of bites, pool the remaining genera together as Other
+df3.summary.Gen.selex <- data_summary(df3.summary.Gen, varname="msBites.sum.mean", groupnames=c("Genus"))
+df3.summary.Gen.selex$Selection <- ifelse(df3.summary.Gen.selex$msBites.sum.mean.sum < 1, "NO", "YES")
+df3.summary.Gen.selex <- dplyr::select(df3.summary.Gen.selex, c('Genus', 'Selection'))
+df3.summary.Gen <- inner_join(df3.summary.Gen, df3.summary.Gen.selex, by = "Genus") # Merge with selection criteria
+df3.summary.Gen$Genus <- ifelse(df3.summary.Gen$Selection == "NO", "Other", df3.summary.Gen$Genus) # Apply selection
+
+### Orderings
+df3.summary.Gen$DietH <- factor(df3.summary.Gen$DietH, levels = c("Grazers", "Browsers", "Scrapers", "Excavators", "Territorial damselfish", "Other"))
+df3.summary.Gen$Genus <- factor(df3.summary.Gen$Genus, levels = c("Centropyge", "Ctenochaetus", "Zebrasoma", "Naso", "Siganus", "Scarus", "Chlorurus", "Amblyglyphidodon", "Other"))
+
+## --- Per Species ---
+### Combine two diets to match species level
+df0.clean$DietS <- ifelse(df0.clean$DietH  == 'Other', df0.clean$Diet, df0.clean$DietH)
+### Set diet names right
+df0.clean$DietS <- as.factor(ifelse(df0.clean$DietS  == 'FisCep', 'Piscivores',
+                  ifelse(df0.clean$DietS  == 'InvMob', 'Invertivores', 
+                   ifelse(df0.clean$DietS  == 'InvSes', 'Invertivores', 
+                    ifelse(df0.clean$DietS  == 'Omnivr', 'Omnivores', 
+                     ifelse(df0.clean$DietS  == 'Plktiv', 'Planktivores',
+                            ifelse(df0.clean$DietS  == 'Other', 'Unknown', 
+                       ifelse(df0.clean$DietS  == 'Unknown', 'Unknown', df0.clean$DietS))))))))
+
+### Get the bites by all species for each RUV
+df3.summary.Specs <- data_summary(df0.clean, varname = "msBites",
+                                     groupnames = c("DietS", "Species", "Protection", "Location", "RUV"))
+### Get average per Species per Location
+df3.summary.Specs <- data_summary(df3.summary.Specs, varname = "msBites.sum", 
+                                  groupnames = c("DietS", "Species", "Protection", "Location"))
+df3.summary.Specs <- subset(df3.summary.Specs, msBites.sum.mean> 0) # Only select combinations with observations (positive values)
+df3.summary.Specs <- dplyr::select(df3.summary.Specs, -c('msBites.sum.sum', 'sd', 'n', 'se')) # Remove unused columns
+df3.summary.Specs$DietS <- factor(df3.summary.Specs$DietS, levels = c("Grazers", "Browsers", "Scrapers", "Excavators", "Territorial damselfish", "Omnivores", "Planktivores", "Invertivores", "Piscivores", "Unknown")) # Order the functional groups
+df3.summary.Specs <- df3.summary.Specs[order(df3.summary.Specs$DietS),] # Ordering first by Species
+df3.summary.Specs <- df3.summary.Specs[order(df3.summary.Specs$Location),] # Ordering last by Location
+
+```
+
 # Model selection
 ```{r SGR: linear model selection}
 
@@ -169,13 +212,13 @@ df3.summary.Gen <- df3.summary.Gen[order(df3.summary.Gen$DietH),]
 # Not chosen for nested model (Location | Protection) because of singularity glmer: Protection interpreted visually
 
 # Prepare data
-df3.summary.Loc_gamma <- df3.summary.Loc_temp
+df3.summary.Loc_gamma <- df3.summary.RUV
 
 # Set zeros to minimum value
-df3.summary.Loc_gamma$sum[df3.summary.Loc_gamma$sum == 0] <- min(df3.summary.Loc_temp$sum[df3.summary.Loc_temp$sum>0])/2
+df3.summary.Loc_gamma$msBites.sum[df3.summary.Loc_gamma$msBites.sum == 0] <- min(df3.summary.Loc_gamma$msBites.sum[df3.summary.Loc_gamma$msBites.sum>0])/2
 
-# Model
-glm1 <- glm(formula = sum ~ Location, family  = Gamma(link = "log"), data = df3.summary.Loc_gamma)
+# Model (maxit = 100 to get convergence)
+glm1 <- glm(formula = msBites.sum ~ Location, family  = Gamma(link = "log"), data = df3.summary.Loc_gamma, maxit = 100)
 
 # Output
 car::Anova(glm1)
@@ -195,7 +238,7 @@ testDispersion(modOutput)
 testUniformity(modOutput)
 plotResiduals(modOutput, form = df3.summary.Loc_gamma$Location)
 abline(0,0)
-plot(fitted(mod) ~ df3.summary.Loc_gamma$sum)
+base::plot(fitted(mod) ~ df3.summary.Loc_gamma$msBites.sum)
 par(op)
 
 ```
@@ -207,7 +250,7 @@ hsd$contrasts
 
 
 # Plots
-```{r SGR plot}
+```{r plots}
 
 # Location only
 # Post hoc letters
@@ -215,60 +258,56 @@ sigletters.loc <- multcomp::cld(hsd$emmeans, alpha = 0.05, Letters = letters, de
 
 # Make order match with summary dataframe
 sigletters.loc <- sigletters.loc[order(sigletters.loc$Location),]
-sigletters.loc <- sigletters.loc %>% mutate(.group = str_squish(.group)) # remove white spaces
+sigletters.loc <- sigletters.loc %>% dplyr::mutate(.group = str_squish(.group)) # remove white spaces
 
 # Merge sig.letter dataframe into the summary dataframe
-df3.summary.Loc <- cbind(df3.summary.Loc, siglet.loc = sigletters.loc$.group)
+df3.summary.Loc$siglet.loc <- sigletters.loc$.group
 
-# Plot
-ggplot(df3.summary.Loc, aes(x = Location, y = mean))+
-  geom_bar(stat = "identity", position = position_dodge())+ 
-  facet_wrap(~ Protection, scales="free_x")+
-  labs(y = expression(paste("ms-Bites (g ", min^-1,")")))+
-  scale_y_continuous(limits = c (0, 800), expand = c(0,0))+
-  geom_errorbar(aes(ymin=mean-(1*se), ymax=mean+(1*se)), width=.2, position=position_dodge(.9))+
-  geom_text(data = df3.summary.Loc, aes(x=Location, y = mean + (1*se), label = siglet.loc), 
+# Plot Genus | DietH
+#df3.summary.Gen_Colour <- data_summary(df3.summary.Gen, varname = "sum", groupnames = c("Genus", "Colour")) # Get colours per Genus
+#seg_col <- c( "#474747", "#dfd20b", "#803280", "#991d1f", "#11813f", "#3853a4") # Set colour per DietH
+gencol <- c("#4026FF", "#4FD2FF", "#CCFFFE", # Grazers
+            "#32AB50", # Browsers
+            "#F99286", # Scrapers
+            "#D86AD8", # Excavators
+            "#F7D45D", # Territorial damselfish
+            "#E5E5E5") # Other
+
+# Stacked bar graph + SE
+df3.summary.Loc <- dplyr::select(df3.summary.Loc, c('Location', 'msBites.sum.mean', 'se', 'siglet.loc'))
+df3.summary.Gen.SE <- inner_join(df3.summary.Gen, df3.summary.Loc, by = "Location") # Merge
+names(df3.summary.Gen.SE)[names(df3.summary.Gen.SE) == "msBites.sum.mean.x"] <- "msBites.sum.mean"
+names(df3.summary.Gen.SE)[names(df3.summary.Gen.SE) == "msBites.sum.mean.y"] <- "msBites.sum.mean.loc"
+
+# Get single values for location, so no overlap in error bars (chose species that is present at all locations for selection)
+df3.summary.Gen.SE$se <- as.numeric(ifelse(df3.summary.Gen.SE$Genus  != 'Ctenochaetus', "", df3.summary.Gen.SE$se))
+df3.summary.Gen.SE$msBites.sum.mean.loc <- as.numeric(ifelse(df3.summary.Gen.SE$Genus  != 'Ctenochaetus', "", df3.summary.Gen.SE$msBites.sum.mean.loc))
+df3.summary.Gen.SE$siglet.loc <- ifelse(df3.summary.Gen.SE$Genus  != 'Ctenochaetus', "", df3.summary.Gen.SE$siglet.loc)
+
+p1SE <- ggplot(df3.summary.Gen.SE) +  
+  geom_bar(position = "stack", stat = "identity", aes(x = Location, y = msBites.sum.mean, fill=Genus))+
+  geom_errorbar(aes(x = Location, ymin=msBites.sum.mean.loc, ymax=msBites.sum.mean.loc+(1*se)),
+                width=.2, size = 1, position=position_dodge(.9))+
+  geom_text(data = df3.summary.Gen.SE, aes(x=Location, y = msBites.sum.mean.loc + (1*se), label = siglet.loc), 
             vjust= -0.8, hjust = 0.5, size = 5, fontface = "bold", position=position_dodge(.9))+
-  scale_x_discrete(expand = c(0, 0.7))+
+  geom_bar(data=df3.summary.Gen.SE[(df3.summary.Gen.SE$Genus=="Ctenochaetus"),], show.legend = FALSE,
+           stat = "identity", aes(x = Location, y = msBites.sum.mean.loc, fill=Genus), alpha=0, size=1, color="black")+
+  scale_fill_manual("Genus", values = gencol)+
+  facet_wrap(~ Protection, scales="free_x")+
   theme_economist()+scale_colour_economist()+
+  labs(x = "Study site", y = expression(paste("ms-Bites (kg ", h^-1,")")))+
+  scale_x_discrete(expand = c(0, 0.7))+
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 55))+
   theme(
     panel.margin.y = unit(0, "cm"),
     strip.text.x = element_text(size = 14, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
     strip.background = element_blank(),
-    axis.title.x = element_text(color="black", vjust=-2, size = 14),
-    axis.text.x = element_text(angle = 0, size=12, face = "bold", vjust=0.5),
-    axis.title.y = element_text(color="black" , vjust=4, size = 14),
-    axis.text.y=element_text(size=12, face = "bold", vjust=0.4),
-    plot.margin = margin(t = 10, r = 40,  b = 25,  l = 20),
-    panel.background = element_rect(fill = "#FCFCFC"),
-    plot.background = element_rect(fill = "#FFFFFF"),
-    panel.grid.major = element_line(colour = "#797979", size = 0.3),
-    axis.ticks = element_blank()
-    )
-ggsave("RUV_Location.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
-
-# Plot Genus | DietH
-
-df3.summary.Gen_Colour <- data_summary(df3.summary.Gen, varname = "sum", groupnames = c("Genus", "Colour")) # Get colours per Genus
-seg_col <- c( "#474747", "#dfd20b", "#803280", "#991d1f", "#3853a4", "#11813f") # Set colour per DietH
-
-# Stacked bar graph
-p1 <-  ggplot(df3.summary.Gen, aes(x = Location, y = sum, fill = Genus)) + 
-  geom_bar(position = "stack", stat="identity", colour = "black") +
-  scale_fill_manual("Genus", values = df3.summary.Gen_Colour$Colour)+
-  facet_wrap(~ Protection, scales="free_x")+
-  theme_economist()+scale_colour_economist()+
-  labs(y = expression(paste("ms-Bites (g ", min^-1,")")))+
-  #geom_segment(data = dt2, aes(x = 1, xend = 2, yend = -1), colour = "black", size = 2)+
-  scale_x_discrete(expand = c(0, 0.7))+
-  scale_y_continuous(expand = c(0, 0), limits = c(0, 420))+
-  theme(
-    panel.margin.y = unit(0, "cm"),
-    strip.text.x = element_text(size = 12, face = "bold", vjust = 2, margin = margin(0.2, 0, 0.1, 0, "cm")),
-    strip.background = element_blank(),
-    legend.position = "right",
+    #legend.position = "right",
+    legend.key=element_rect(colour="#FF0000", size=12),
+    legend.key.size = unit(0.55, "cm"),
     legend.title = element_text(size = 12, face = "bold", hjust = 0.3),
-    legend.text = element_text(size = 11, face = "italic"),
+    legend.text = element_text(size = 11.5, face = "italic"),
+    legend.position = c(1.22, 0.3),
     axis.title.x = element_text(size = 14, vjust = -2),
     axis.text.x = element_text(size = 12, face = "bold", vjust = 0.5),
     axis.title.y = element_text( size = 14, vjust = 4),
@@ -276,37 +315,113 @@ p1 <-  ggplot(df3.summary.Gen, aes(x = Location, y = sum, fill = Genus)) +
     panel.background = element_rect(fill = "#FCFCFC"),
     plot.background = element_rect(fill = "#FFFFFF"),
     panel.grid.major = element_line(colour = "#FFFFFF", size = 1),
-    axis.ticks = element_blank()
-    ) 
+    axis.ticks = element_blank(),
+    plot.margin = unit(c(0.3,5.5,0.4,0.4), "cm"))
+    
 
 # Create dataframe for legend    
-dt <- data.table(x = 1, y = seq(1, 12, 1), z = factor(1:12))
-dt[ , grp := cut(as.numeric(z), breaks = c(0, 1, 4, 5, 6, 10, 12),
-                labels = c("", "Damselfish", "Excavators", "Scrapers", "Grazers", "Browsers"))]
+dt <- data.table(x = 1, y = seq(1, 8, 1), z = factor(1:8))
+dt[ , grp := cut(as.numeric(z), breaks = c(0, 1, 2, 3, 4, 5, 8),
+                labels = c("", "Damselfish", "Excavators", "Scrapers", "Browsers", "Grazers"))]
 dt2 <- dt[ , .(x = 1, y = min(y), yend = max(y), ymid = mean(y)), by = grp]
 dt3 <- data.table(x = 1, y = unlist(dt2[ , .(y, yend)]))
 v <- 0.3 # offset
 
 # Plot legend
 p2 <- ggplot(mapping = aes(x = x, y = y)) +
-  geom_point(data = dt, size = 5)+
-  geom_segment(data = dt2, aes(x = x + v, xend = x + v, yend = yend), colour = seg_col, size = 1)+
+  geom_point(data = dt, size = 8)+
+  geom_segment(data = dt2, aes(x = x + v, xend = x + v, yend = yend),
+               colour = c("#FFFFFF","#dfd20b", "#803280", "#991d1f", "#11813f", "#3853a4"), size = 1)+
   geom_segment(data = dt3, aes(x = x + v, xend = x + (v - 0.1), yend = y), size = 1, 
-    colour=c("black","#dfd20b","black","black","#3853a4","#11813f","white","#dfd20b","#803280","#991d1f","#3853a4","#11813f"))+
-  geom_text(data = dt2, aes(x = x + v + 0.4, y = ymid, label = grp), colour = seg_col, size = 4, fontface = "bold", vjust = 0.3)+
+    colour=c("#FFFFFF", # NA (Other floor)
+             "#dfd20b", # Damsel floor
+             "#803280", # Excavator floor
+             "#991d1f", # Scraper floor
+             "#11813f", # Browser floor 
+             "#3853a4", # Grazer floor
+             "#FFFFFF", # Other (ceiling)
+             "#dfd20b", # Damsel ceiling
+             "#803280", # Excavator ceiling
+             "#991d1f", # Scraper ceiling
+             "#11813f", # Browser ceiling 
+             "#3853a4"))+ # Grazer ceiling
+  geom_text(data = dt2, aes(x = x + v + 0.35, y = ymid, label = grp),
+    colour = c("#959595", "#dfd20b", "#803280", "#991d1f", "#11813f", "#3853a4"), size = 4, fontface = "bold", vjust = 0.3)+
   scale_color_manual(values = "", guide = "none") +
   scale_x_continuous(limits = c(1.2, 2))+
   theme_void()+
-  theme(plot.margin = unit(c(0.3,0,0.1,0), "cm"))
+  theme(plot.margin = unit(c(1.7,0,-1.7,-0.45), "cm"))
 
-# Merge bar graph and legend
-plot_grid(p1, plot_grid(NULL, p2, NULL, nrow = 3, rel_heights = c(0.9, 4.5, 0.9)), rel_widths = c(6, 1))
+plot_grid(p1SE, plot_grid(NULL, p2, NULL, nrow = 3, rel_heights = c(0.75, 0.95, 0.75)), rel_widths = c(6, 1))
 
-ggsave("RUV by genus and diet.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+ggsave("RUV by genus and diet_SE.tiff", width = 23, height = 11, units = "cm", dpi=1200, compression = "lzw")
+
+```
+# Table for species
+```{r table}
+
+Tab.Specs <- dplyr::select(df3.summary.Specs, c('Location', 'DietS', 'Species', 'msBites.sum.mean')) # Select columns to show
+Tab.Specs$msBites.sum.mean <- round(Tab.Specs$msBites.sum.mean, 2) # Round to 2 decimals
+names(Tab.Specs) <- c("Location", "Functional group", "Species", "ms-Bites (kg/hour)")
+
+# create new word document
+new.word.doc=function(){
+  my.doc=read_docx()
+  return(my.doc)
+}
+
+# add an empty line
+add.empty.line=function(doc){
+  body_add_par(doc, " ")
+  return("empty line added")
+}
+
+# add a data frame as a table
+add.table=function(doc, tbl, col.keys=NULL, col.digits=NULL){
+  # create basic flextable
+  f.table=qflextable(tbl)
+  
+  # set table borders
+  f.table=border_inner_h(f.table, part="header", border=fp_border(color="black", width = 1))
+  #f.table=border_inner_v(f.table, part="all", border=fp_border(color="black", width = 1))
+  
+  # set fonts
+  f.table=flextable::font(f.table,  fontname = "Times", part = "all")
+  # also set the table's header font as bold
+  f.table=bold(f.table, part = "header")
+  
+  # add the table to the document
+  flextable::body_add_flextable(doc, 
+                                value = f.table, 
+                                align = "left" )
+  return("table added")
+}
+
+# create a new document object
+doc=new.word.doc()
+add.table(doc, Tab.Specs)
+
+# generate the Word document using the print function
+print(doc, target="RUV bites by Species.docx")
+
+```
+# Save summary data to Excel for correlations
+```{r corexcel}
+
+RUV.Bites.tot <- dplyr::select(df3.summary.Loc, c('Location', 'msBites.sum.mean', 'se')) 
+names(RUV.Bites.tot) <- c("Location", "msBites_Total_kg.h", "msBites_Total_kg.h.se")
+write_xlsx(RUV.Bites.tot,"Correlation data/ Correlations_RUVBitesTot.xlsx")
 
 ```
 
+# Check packages used
+```{r}
 
+knitr::purl("Grazing_RUV.Rmd")
+list.functions.in.file("Grazing_RUV.R")
+unlink("Grazing_RUV.R")
+
+```
 
 
 

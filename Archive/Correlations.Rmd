@@ -1,0 +1,477 @@
+---
+title: "Correlations"
+author: "Ewout Knoester"
+date: "10/03/2022"
+output: html_document
+---
+
+# TODO: Chose which correlations to show in final graph
+# TO DO: add error bars
+
+# Setup
+```{r setup, include=FALSE}
+
+rm(list=ls()) # Clear workspace
+knitr::opts_knit$set(root.dir = '/tmp') #Set directory at current directory for all subsequent chunks
+
+library(readxl) # Import excel sheets
+library(writexl)
+library(tidyverse) # Data manipulation and plotting
+library(plyr) # Data summary
+library(ggthemes) # pretty plots
+library(ggpubr) # Arrange plots
+library(data.table) # means multiple columns by factor
+
+# Function to facilitate averaging dataset
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE),
+      n  = length(x[[col]]),
+      se = sd(x[[col]], na.rm=TRUE)/sqrt(length(x)))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- plyr::rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+```
+
+# Load & organize data
+<!--
+Data info:
+  Summary data per Location gathered from the following files:
+  -> Grazing_coral.rmd: coral growth rate and live tissue cover (Correlations_Coral.xlsx)
+  -> Grazing_Fouling.rmd: fouling density per fouling type (Correlations_Fouling.xlsx)
+  -> Grazing_RUV.rmd: total mass-scaled bites (Correlations_RUVBitesTot.xlsx)
+  -> Total fish biomass.xlsx (from 6 study sites map): total fish biomass from 2019 surveys
+  -> Correlations_FishBenthic (from 2019 Browsing study): brwosing pressure, coral cover, macroalgae cover and fish biomass per functional group
+-->
+
+
+
+```{r data loading}
+
+# CORAL
+Coral <- read_excel("Correlation data/Correlations_Coral.xlsx")
+
+# FOULING
+Fouling <- read_excel("Correlation data/Correlations_Fouling.xlsx")
+
+# RUV GRAZING
+RUV <- read_excel("Correlation data/Correlations_RUVBitesTot.xlsx")
+
+# RUV BROWSING
+RUVB <- read_excel("Correlations_RUVBrowsingBites.xlsx")
+
+# FISH TOT
+Fish.tot <- read_excel("Total fish biomass.xlsx", sheet = 1)
+Fish.tot <- data_summary(Fish.tot, varname = "biomass.kg.ha", groupnames = c("Location"))
+Fish.tot <- select(Fish.tot, c("Location", "biomass.kg.ha"))
+
+## FISH & BENTHIC
+FIBE <- read_excel("Correlations_FishBenthic.xlsx", sheet = 1)
+
+# COMBINE
+Averages <- join(Coral, Fouling, by = "Location")
+Averages <- join(Averages, RUV, by = "Location")
+Averages <- join(Averages, RUVB, by = "Location")
+Averages <- join(Averages, Fish.tot, by = "Location")
+Averages <- join(Averages, FIBE, by = "Location")
+
+Averages$Protection <- ifelse(Averages$Location %in% c(1, 2),"Fishing",
+  ifelse(Averages$Location %in% c(3, 4), "Reserve", "No-take"))
+Averages$Protection <- factor(Averages$Protection)
+Averages$Protection <- ordered(Averages$Protection, levels = c("Fishing", "Reserve", "No-take"))
+
+Averages.selection <- select(Averages, c("Location", "SGR", "Condition", "Fouling.tot", "msBites_Total_kg.h", "biomass.kg.ha",
+                                         "Herbivores_2019", "Grazers_2019", "Ctenochaetus_2019"))
+
+Averages.selection2 <- select(Averages, c("Location", "msBites_Total_kg.h", "BrowsingBites_kg.h", "biomass.kg.ha",
+                                         "Herbivores_2019", "Grazers_2019", "Ctenochaetus_2019", "Fouling.tot", "Browsing_2019" ))
+
+# Abstract averages:
+Averages.abs <- as.data.table(select(Averages, c("Protection", "SGR", "Macroalgae", "CCA", "Fouling.tot", "msBites_Total_kg.h")))
+Averages.abs <- Averages.abs[, lapply(.SD, mean), by = Protection] 
+
+```
+
+# Correlations
+```{r correlations}
+
+cors <- as.data.frame(correlation::correlation(Averages.selection, p_adjust = "none"))
+cors$ID <- paste(cors$Parameter1, cors$Parameter2, sep = "X")
+cors <- subset(cors, Parameter1 == "SGR")
+cors <- cors[c(3, 9, 12)]
+cors$r <- round(cors$r, 2)
+cors$p <- round(cors$p, 2)
+cors$star <- ifelse(cors$p <= 0.001, "***",
+  ifelse(cors$p <= 0.01, "**", 
+    ifelse(cors$p <= 0.05, "*", "")))
+cors$sum <- paste("R = ", cors$r, cors$star, sep = "")
+
+corsB <- as.data.frame(correlation::correlation(Averages.selection2, p_adjust = "none"))
+corsB$ID <- paste(corsB$Parameter1, corsB$Parameter2, sep = "X")
+corsB <- subset(corsB, Parameter1 == "msBites_Total_kg.h")
+corsB <- corsB[c(3, 9, 12)]
+corsB$r <- round(corsB$r, 2)
+corsB$p <- round(corsB$p, 2)
+corsB$star <- ifelse(corsB$p <= 0.001, "***",
+  ifelse(corsB$p <= 0.01, "**", 
+    ifelse(corsB$p <= 0.05, "*", "")))
+corsB$sum <- paste("R = ", corsB$r, corsB$star, sep = "")
+
+cors <- rbind(cors, corsB)
+
+```
+
+# Compiled Fig
+```{r}
+
+# Layout:
+ytitle <- "Algae consumed (F)"
+Mar <- c(15,0,15,0) # Plot margins
+colour_p <- c("#B3DCFF","#FFD989", "#e06060")
+
+#A
+SGR.FOUL <- ggplot(Averages, aes(x=Fouling.tot, y=SGR)) + 
+  scale_x_continuous(expression(paste("Fouling (g ", m^-2,")")), breaks = c(0, 150, 300), label = waiver (), limits = c (0,310))+
+  scale_y_continuous(expression(paste("SGR (", d^-1,")")), breaks = c(0, 0.010), label = waiver (), limits = c (0,0.015))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.title.y = element_text(color="black", size = 14),
+    axis.text.y=element_text(size=14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 215, y = 0.0085, label = cors$sum[cors$ID == "SGRXFouling.tot"], size = 4)
+
+#B
+BITES.FOUL <- ggplot(Averages, aes(x=msBites_Total_kg.h, y=Fouling.tot)) + 
+  scale_x_continuous(expression(paste("ms-Bites (kg ", h^-1,")")), breaks = c(0, 20, 40), label = waiver (), limits = c (0,42))+
+  scale_y_continuous(expression(paste("Fouling (g ", m^-2,")")), breaks = c(0, 150, 300), label = waiver (), limits = c (0, 320))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.title.y = element_text(color="black", size = 14, vjust=1),
+    axis.text.y = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 25, y = 150, label = cors$sum[cors$ID == "msBites_Total_kg.hXFouling.tot"], size = 4)
+
+#C
+SGR.HERBS <- ggplot(Averages, aes(x=Herbivores_2019, y=SGR)) + 
+  scale_x_continuous(expression(paste("Herbivores (kg ", ha^-1,")")), breaks = c(0, 250, 500), label = waiver (), limits = c (0,520))+
+  scale_y_continuous(expression(paste("SGR (", d^-1,")")), breaks = c(0, 0.005, 0.010, 0.015), label = waiver (), limits = c (0,0.016))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.title.y = element_text(color="black", size = 14),
+    axis.text.y = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 300, y = 0.0080, label = cors$sum[cors$ID == "SGRXHerbivores_2019"], size = 4)
+
+#D
+SGR.GRAZERS <- ggplot(Averages, aes(x=Grazers_2019, y=SGR)) + 
+  scale_x_continuous(expression(paste("Grazers (kg ", ha^-1,")")), breaks = c(0, 50, 100), label = waiver (), limits = c (0,110))+
+  scale_y_continuous("", breaks = c(0, 0.005, 0.010, 0.015), label = waiver (), limits = c (0,0.016))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.text.y = element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 65, y = 0.007, label = cors$sum[cors$ID == "SGRXGrazers_2019"], size = 4)
+
+#E
+SGR.CTE <- ggplot(Averages, aes(x=Ctenochaetus_2019, y=SGR)) + 
+  scale_x_continuous(expression(paste("Ctenochaetus (kg ", ha^-1,")")), breaks = c(0, 20, 40), label = waiver (), limits = c (0,42))+
+  scale_y_continuous("", breaks = c(0, 0.005, 0.010, 0.015), label = waiver (), limits = c (0,0.016))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.text.y = element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 30, y = 0.007, label = cors$sum[cors$ID == "SGRXCtenochaetus_2019"], size = 4)
+
+#F
+BITES.HERBS <- ggplot(Averages, aes(x=Herbivores_2019, y=msBites_Total_kg.h)) + 
+  scale_x_continuous(expression(paste("Herbivores (kg ", ha^-1,")")), breaks = c(0, 250, 500), label = waiver (), limits = c (0,510))+
+  scale_y_continuous(expression(paste("ms-Bites (kg ", h^-1,")")), breaks = c(0, 20, 40), label = waiver (), limits = c (0, 40))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.title.y = element_text(color="black", size = 14, vjust = 1),
+    axis.text.y = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 250, y = 14, label = cors$sum[cors$ID == "msBites_Total_kg.hXHerbivores_2019"], size = 4)
+
+#G
+BITES.GRAZERS <- ggplot(Averages, aes(x=Grazers_2019, y=msBites_Total_kg.h)) + 
+  scale_x_continuous(expression(paste("Grazers (kg ", ha^-1,")")), breaks = c(0, 50, 100), label = waiver (), limits = c (0,110))+
+  scale_y_continuous("", breaks = c(0, 20, 40), label = waiver (), limits = c (0, 40))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.text.y = element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 55, y = 12, label = cors$sum[cors$ID == "msBites_Total_kg.hXGrazers_2019"], size = 4)
+
+#H
+BITES.CTE <- ggplot(Averages, aes(x=Ctenochaetus_2019, y=msBites_Total_kg.h)) + 
+  scale_x_continuous(expression(paste("Ctenochaetus (kg ", ha^-1,")")), breaks = c(0, 20, 40), label = waiver (), limits = c (0,42))+
+  scale_y_continuous("", breaks = c(0, 20, 40), label = waiver (), limits = c (0, 40))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.text.y = element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 26, y = 16, label = cors$sum[cors$ID == "msBites_Total_kg.hXCtenochaetus_2019"], size = 4)
+
+#
+SGR.BITES <- ggplot(Averages, aes(x=msBites_Total_kg.h, y=SGR)) + 
+  scale_x_continuous(expression(paste("ms-Bites (kg ", h^-1,")")), breaks = c(0, 20, 40), label = waiver (), limits = c (0,40))+
+  scale_y_continuous("", breaks = c(0, 0.005, 0.010, 0.015), label = waiver (), limits = c (0,0.016))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.text.y = element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 16, y = 0.01, label = cors$sum[cors$ID == "SGRXmsBites_Total_kg.h"], size = 4)
+
+#
+BITESG.BITESB <- ggplot(Averages, aes(x=BrowsingBites_kg.h, y=msBites_Total_kg.h)) + 
+  scale_x_continuous(expression(paste("Browsing (kg ", h^-1,")")), breaks = c(0, 30, 60), label = waiver (), limits = c (0,64))+
+  scale_y_continuous(expression(paste("Grazing (kg ", h^-1,")")), breaks = c(0, 20, 40), label = waiver (), limits = c (0, 40))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    #axis.text.y = element_blank(),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 28, y = 22, label = cors$sum[cors$ID == "msBites_Total_kg.hXBrowsingBites_kg.h"], size = 4)
+
+#
+SGR.COND <- ggplot(Averages, aes(x=Condition, y=SGR)) + 
+  scale_x_continuous(expression(paste("Condition (%)")), breaks = c(80, 90, 100), label = waiver (), limits = c (80,105))+
+  scale_y_continuous(expression(paste("SGR (", d^-1,")")), breaks = c(0, 0.005, 0.010, 0.015), label = waiver (), limits = c (0,0.016))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.title.y = element_text(color="black", size = 14),
+    axis.text.y=element_text(size=14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 100, y = 0.0085, label = cors$sum[cors$ID == "SGRXCondition"], size = 4)
+
+#
+SGR.FISHTOT <- ggplot(Averages, aes(x=biomass.kg.ha, y=SGR)) + 
+  scale_x_continuous(expression(paste("Total fish (kg ", ha^-1,")")), breaks = c(0, 1000, 2000), label = waiver (), limits = c (0,2000))+
+  scale_y_continuous(expression(paste("SGR (", d^-1,")")), breaks = c(0, 0.010), label = waiver (), limits = c (0,0.015))+
+  geom_point(aes(colour=Protection), size =6) +
+  scale_color_manual(values = colour_p)+
+  geom_smooth(colour="black", method="lm", se=FALSE, size = 1.2, fullrange=TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color="black", vjust=-1, size = 14),
+    axis.text.x = element_text(angle = 0, size=14, face = "bold", vjust=0),
+    axis.title.y = element_text(color="black", size = 14),
+    axis.text.y=element_text(size=14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype=1),
+    panel.border = element_rect(colour = "white", fill=NA, size=0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour="#FCFCFC", size=0.1),
+    plot.margin = margin(Mar, "cm")
+    )+
+    guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+    geom_text(aes(label=Location),hjust=0.5, vjust=0.35)+
+    annotate("text", x = 1000, y = 0.0085, label = cors$sum[cors$ID == "SGRXbiomass.kg.ha"], size = 4)
+
+LegPlot <- ggplot(Averages, aes(x=BrowsingBites_kg.h, y=msBites_Total_kg.h)) + 
+  geom_point(aes(colour=Protection), size =8) +
+  scale_color_manual(values = colour_p)+
+  theme(
+    legend.box.background = element_rect(colour = "transparent", fill = "transparent"),
+    legend.box.margin = margin(-35, 0, 0, 20),
+    legend.title=element_text(size=16),
+    legend.text=element_text(size=14),
+    legend.key = element_rect(fill = "transparent"),
+    plot.margin = margin(Mar, "cm"),
+    legend.position="right"
+    )+
+  labs(colour = "Protection")+
+  guides(colour = guide_legend(order = 1))
+LegPlot
+
+Leg <- as_ggplot(get_legend(LegPlot))+
+   theme(legend.key = element_rect(fill = "black"))
+Leg
+
+figure <- ggarrange(SGR.FOUL, ggplot() + theme_void(), BITES.FOUL, ggplot() + theme_void(), SGR.FISHTOT,
+                    BITES.HERBS, ggplot() + theme_void(), BITES.GRAZERS, ggplot() + theme_void(), BITES.CTE,
+                    labels = c("a", "", "b", "", "c", "d", "", "e", "", "f"), vjust = 0.4, hjust = -2.5,
+                    font.label = list(size = 18, color = "black", face = "bold", family = NULL),
+                    widths = c(1, 0.02, 1, 0.02, 1),
+                    ncol = 5, nrow = 2, 
+                    common.legend = T,
+                    align = "hv",
+                    legend="bottom")+
+  theme(plot.margin = margin(0.4,0.4,0.1,0.1, "cm")) 
+ggsave("Correlations.tiff", figure, width = 24, height = 16, units = "cm", dpi=1200, compression = "lzw")
+
+```
+
+
