@@ -201,6 +201,8 @@ model.data$Biomass.herb[model.data$Biomass.herb == 0] <- min(model.data$Biomass.
 # Model
 glm.1 <- glm(formula = Biomass.herb ~ Location, family  = Gamma(link = "log"), data = model.data)
 
+car::Anova(glm.1)
+
 ```
 
 ## Model validation
@@ -338,6 +340,10 @@ Herbivores$Biomass.loc.cte <- df2.bm.loc.cte$Biomass.loc
 Herbivores$Biomass.loc.cte.se <- df2.bm.loc.cte$se
 
 write_xlsx(Herbivores,"Correlation data/Correlations_Herbivores.xlsx")
+
+# Grazers as percentage of total herbivores
+Grazers <- select(Herbivores, c('Location', 'Biomass.loc.herb', 'Biomass.loc.grazers'))
+Grazers$Percentage <- (Grazers$Biomass.loc.grazers/Grazers$Biomass.loc.herb)*100
 
 ```
 

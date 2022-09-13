@@ -97,6 +97,10 @@ names(df1.clean.tot.temp)[names(df1.clean.tot.temp) == "sum"] <- "Weight.tot"
 df1.clean.tot.sum <- data_summary(df1.clean.tot.temp, varname = "Weight.tot", groupnames = c("Protection", "Location"))
 df1.clean.tot.sum <- dplyr::select(df1.clean.tot.sum, -c('sum')) # Remove the sum
 
+# Same for transformed data
+df1.clean.tot.temp$Weight.log <- log10(df1.clean.tot.temp$Weight.tot)
+df1.clean.tot.sum.log <- data_summary(df1.clean.tot.temp, varname = "Weight.log", groupnames = c("Protection", "Location"))
+
 # Prepare data for MANOVA
 df1.clean <- tibble::rownames_to_column(df1.clean, "ID")
 df1.clean$ID <- paste(df1.clean$Location, ".", df1.clean$Structure)
@@ -586,6 +590,8 @@ base::print(doc, target="Fouling post hoc per type.docx")
 
 Fouling <- dplyr::select(df1.clean.tot.sum, c('Location', 'Weight.tot', 'se'))
 names(Fouling)[names(Fouling) == "se"] <- "Weight.tot.se"
+Fouling$Weight.log <- df1.clean.tot.sum.log$Weight.log
+Fouling$Weight.log.se <- df1.clean.tot.sum.log$se
 
 write_xlsx(Fouling,"Correlation data/Correlations_Fouling.xlsx")
 

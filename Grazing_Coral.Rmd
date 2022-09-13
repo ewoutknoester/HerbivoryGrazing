@@ -92,6 +92,12 @@ df1.clean$Protection <- factor(df1.clean$Protection, ordered = TRUE, levels = c(
 df1.clean <- subset(df1.clean, is.na(Cause_1) | Cause_1 != "Structure down")
 df1.clean <- subset(df1.clean, is.na(Cause_1) | Cause_1 != "Missing")
 
+# Set data types
+df1.clean$Length_0 <- as.numeric(df1.clean$Length_0)
+
+# Check initial sizes
+df1.size.loc <- data_summary(df1.clean, varname = "Length_0", groupnames = c("Location"))
+
 # Condition subset
 df2.condition <- select(df1.clean, c('Protection', 'Location', 'Structure', 'Condition_1'))
 names(df2.condition)[names(df2.condition) == "Condition_1"] <- "Condition"

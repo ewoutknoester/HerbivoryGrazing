@@ -70,7 +70,9 @@ Averages$Protection <- ifelse(Averages$Location %in% c(1, 2), "Fished",
 Averages$Protection <- factor(Averages$Protection, ordered = TRUE, levels = c("Fished", "Reserve", "No-take"))
 
 Averages.selection <- select(Averages, c("Biomass.loc.herb", "Biomass.loc.grazers", "Biomass.loc.cte",
-                                         "msBites_Total_kg.h", "Weight.tot", "SGR"))
+                                         "msBites_Total_kg.h", "Weight.tot", "Weight.log", "SGR", "Condition"))
+
+Averages.selection$Depth <- c(2.5, 4.5, 6.5, 9.5, 5.5, 3.5)
 
 # Abstract averages:
 Averages.abs <- as.data.table(select(Averages, c("Protection", "msBites_Total_kg.h", "Weight.tot", "SGR")))
@@ -199,19 +201,19 @@ CTE.BITES<- ggplot(Averages, aes(x = Biomass.loc.cte, y = msBites_Total_kg.h))+
   annotate("text", x = 30, y = 16, label = cors$sum[cors$ID == "Biomass.loc.cteXmsBites_Total_kg.h"], size = 4)
 
 # Bites x Fouling
-BITES.FOUL <- ggplot(Averages, aes(x = msBites_Total_kg.h, y = Weight.tot))+
+BITES.FOUL <- ggplot(Averages, aes(x = msBites_Total_kg.h, y = Weight.log))+
   geom_point(aes(colour = Protection), size = 6)+
   scale_color_manual(values = colour_p)+
   scale_x_continuous(expression(paste("ms-Bites (kg ", h^-1,")")),
                      breaks = c(0, 25, 50), label = waiver (), limits = c (0, 50))+
   scale_y_continuous(expression(paste("Fouling (g ", m^-2,")")),
-                     breaks = c(0, 150, 300), label = waiver (), limits = c (0, 350))+
+                     breaks = c(1.5, 2, 2.5), label = waiver (), limits = c (1.4, 2.6))+
   geom_errorbar(aes(x = msBites_Total_kg.h, colour = Protection, 
                 xmin = ifelse(msBites_Total_kg.h - msBites_Total_kg.h.se < 0, 0, msBites_Total_kg.h - msBites_Total_kg.h.se),
                 xmax = msBites_Total_kg.h + msBites_Total_kg.h.se), width = 0.02 * max(Averages$Weight.tot), size = sizese)+
   geom_errorbar(aes(x = msBites_Total_kg.h, colour = Protection,
-                ymin = ifelse(Weight.tot - Weight.tot.se < 0, 0, Weight.tot - Weight.tot.se),
-                ymax = Weight.tot + Weight.tot.se), width = 0.02 * max(Averages$msBites_Total_kg.h), size = sizese)+
+                ymin = ifelse(Weight.log - Weight.log.se < 0, 0, Weight.log - Weight.log.se),
+                ymax = Weight.log + Weight.log.se), width = 0.02 * max(Averages$msBites_Total_kg.h), size = sizese)+
   geom_smooth(colour = "black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE)+ 
   theme(
     text = element_text(size = 16),
@@ -229,7 +231,7 @@ BITES.FOUL <- ggplot(Averages, aes(x = msBites_Total_kg.h, y = Weight.tot))+
     plot.margin = margin(Mar, "cm"))+
   guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
   geom_text(aes(label = Location), hjust = 0.5, vjust = 0.35)+
-  annotate("text", x = 24, y = 160, label = cors$sum[cors$ID == "msBites_Total_kg.hXWeight.tot"], size = 4)
+  annotate("text", x = 24, y = 2, label = cors$sum[cors$ID == "msBites_Total_kg.hXWeight.log"], size = 4)
 
 # Fouling x Growth
 FOUL.SGR <- ggplot(Averages, aes(x = Weight.tot, y = SGR))+
