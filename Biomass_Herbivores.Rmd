@@ -194,14 +194,24 @@ hist(log10(df2.bm.sur.herb$Biomass.herb))
 
 # Prepare data
 model.data <- df2.bm.sur.herb
+model.data$ReefType <- as.factor(ifelse(model.data$Location == 1, "Patch",
+                       ifelse(model.data$Location == 2, "Patch",
+                       ifelse(model.data$Location == 3, "Fringe",
+                       ifelse(model.data$Location == 4, "Fringe",
+                       ifelse(model.data$Location == 5, "Fringe",
+                       ifelse(model.data$Location == 6, "Patch", "Other")))))))
 
 # Set zero to minimum value
 model.data$Biomass.herb[model.data$Biomass.herb == 0] <- min(model.data$Biomass.herb[model.data$Biomass.herb>0])/2
 
 # Model
 glm.1 <- glm(formula = Biomass.herb ~ Location, family  = Gamma(link = "log"), data = model.data)
+glm.1.RT <- glm(formula = Biomass.herb ~ Location + ReefType, family  = Gamma(link = "log"), data = model.data)
+AIC(glm.1, glm.1.RT) # ReefType not important
 
+# Final model
 car::Anova(glm.1)
+
 
 ```
 

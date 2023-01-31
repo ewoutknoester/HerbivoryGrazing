@@ -72,7 +72,7 @@ Averages$Protection <- factor(Averages$Protection, ordered = TRUE, levels = c("F
 Averages.selection <- select(Averages, c("Biomass.loc.herb", "Biomass.loc.grazers", "Biomass.loc.cte",
                                          "msBites_Total_kg.h", "Weight.tot", "Weight.log", "SGR", "Condition"))
 
-Averages.selection$Depth <- c(2.5, 4.5, 6.5, 9.5, 5.5, 3.5)
+Averages.selection$Depth <- c(2.5, 5.5, 5.5, 8.5, 10.5, 4.5)
 
 # Abstract averages:
 Averages.abs <- as.data.table(select(Averages, c("Protection", "msBites_Total_kg.h", "Weight.tot", "SGR")))
@@ -117,7 +117,7 @@ HERB.BITES <- ggplot(Averages, aes(x = Biomass.loc.herb, y = msBites_Total_kg.h)
   geom_errorbar(aes(x = Biomass.loc.herb, colour = Protection,
                 ymin = msBites_Total_kg.h - msBites_Total_kg.h.se,
                 ymax = msBites_Total_kg.h + msBites_Total_kg.h.se), width = 0.02 * max(Averages$Biomass.loc.herb), size = sizese)+
-  geom_smooth(colour = "black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE)+ 
+  geom_smooth(colour = "black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE, linetype = "dotted")+ 
   theme(
     text = element_text(size = 16),
     axis.title.x = element_text(color = "black", vjust = -1, size = 14),
@@ -149,7 +149,7 @@ GRAZERS.BITES <- ggplot(Averages, aes(x = Biomass.loc.grazers, y = msBites_Total
   geom_errorbar(aes(x = Biomass.loc.grazers, colour = Protection,
                 ymin = msBites_Total_kg.h - msBites_Total_kg.h.se,
                 ymax = msBites_Total_kg.h + msBites_Total_kg.h.se), width = 0.02 * max(Averages$Biomass.loc.grazers), size = sizese)+
-  geom_smooth(colour = "black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE)+ 
+  geom_smooth(colour = "black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE, linetype = "dotted")+ 
   theme(
     text = element_text(size = 16),
     axis.title.x = element_text(color = "black", vjust = -1, size = 14),
@@ -200,21 +200,53 @@ CTE.BITES<- ggplot(Averages, aes(x = Biomass.loc.cte, y = msBites_Total_kg.h))+
   geom_text(aes(label = Location), hjust = 0.5, vjust = 0.35)+
   annotate("text", x = 30, y = 16, label = cors$sum[cors$ID == "Biomass.loc.cteXmsBites_Total_kg.h"], size = 4)
 
+# Herbivores x Fouling
+HERB.FOUL <- ggplot(Averages, aes(x = Biomass.loc.herb, y = Weight.log))+
+  geom_point(aes(colour = Protection), size = 6)+
+  scale_color_manual(values = colour_p)+
+  scale_x_continuous(expression(paste("Herbivorous fish (kg ", ha^-1,")")),
+                     breaks = c(0, 250, 500), label = waiver (), limits = c (0, 550))+
+  scale_y_continuous(expression(paste("Fouling (g ", m^-2,")")),
+                     breaks = c(1.5, 2, 2.5), label = waiver (), limits = c (1.4, 2.6))+
+  geom_errorbar(aes(x = Biomass.loc.herb, colour = Protection, 
+                xmin = ifelse(Biomass.loc.herb - Biomass.loc.herb.se < 0, 0, Biomass.loc.herb - Biomass.loc.herb.se),
+                xmax = Biomass.loc.herb + Biomass.loc.herb.se), width = 0.02 * max(Averages$Weight.tot), size = sizese)+
+  geom_errorbar(aes(x = Biomass.loc.herb, colour = Protection,
+                ymin = ifelse(Weight.log - Weight.log.se < 0, 0, Weight.log - Weight.log.se),
+                ymax = Weight.log + Weight.log.se), width = 0.02 * max(Averages$Biomass.loc.herb), size = sizese)+
+  geom_smooth(colour = "black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE, linetype = "dotted")+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color = "black", vjust = -1, size = 14),
+    axis.text.x = element_text(angle = 0, size = 14, face = "bold", vjust = 0),
+    axis.title.y = element_text(color = "black", size = 14, vjust = -2),
+    axis.text.y = element_text(angle = 0, size = 14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype = 1),
+    panel.border = element_rect(colour = "white", fill = NA, size = 0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour = "#FCFCFC", size = 0.1),
+    plot.margin = margin(Mar, "cm"))+
+  guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+  geom_text(aes(label = Location), hjust = 0.5, vjust = 0.35)+
+  annotate("text", x = 250, y = 2, label = cors$sum[cors$ID == "Biomass.loc.herbXWeight.log"], size = 4)
+
 # Bites x Fouling
 BITES.FOUL <- ggplot(Averages, aes(x = msBites_Total_kg.h, y = Weight.log))+
   geom_point(aes(colour = Protection), size = 6)+
   scale_color_manual(values = colour_p)+
   scale_x_continuous(expression(paste("ms-Bites (kg ", h^-1,")")),
                      breaks = c(0, 25, 50), label = waiver (), limits = c (0, 50))+
-  scale_y_continuous(expression(paste("Fouling (g ", m^-2,")")),
-                     breaks = c(1.5, 2, 2.5), label = waiver (), limits = c (1.4, 2.6))+
+  scale_y_continuous("", breaks = c(1.5, 2, 2.5), label = waiver (), limits = c (1.4, 2.6))+
   geom_errorbar(aes(x = msBites_Total_kg.h, colour = Protection, 
                 xmin = ifelse(msBites_Total_kg.h - msBites_Total_kg.h.se < 0, 0, msBites_Total_kg.h - msBites_Total_kg.h.se),
                 xmax = msBites_Total_kg.h + msBites_Total_kg.h.se), width = 0.02 * max(Averages$Weight.tot), size = sizese)+
   geom_errorbar(aes(x = msBites_Total_kg.h, colour = Protection,
                 ymin = ifelse(Weight.log - Weight.log.se < 0, 0, Weight.log - Weight.log.se),
                 ymax = Weight.log + Weight.log.se), width = 0.02 * max(Averages$msBites_Total_kg.h), size = sizese)+
-  geom_smooth(colour = "black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE)+ 
+  geom_smooth(colour = "black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE, linetype = "dotted")+ 
   theme(
     text = element_text(size = 16),
     axis.title.x = element_text(color = "black", vjust = -1, size = 14),
@@ -239,8 +271,7 @@ FOUL.SGR <- ggplot(Averages, aes(x = Weight.tot, y = SGR))+
   scale_color_manual(values = colour_p)+
   scale_x_continuous(expression(paste("Fouling (g ", m^-2,")")),
                      breaks = c(0, 150, 300), label = waiver (), limits = c (0, 350))+
-  scale_y_continuous(expression(paste("SGR (", d^-1,")")),
-                     breaks = c(0, 0.005, 0.010, 0.015), label = waiver (), limits = c (0,0.016))+
+  scale_y_continuous("", breaks = c(0, 0.005, 0.010, 0.015), label = waiver (), limits = c (0,0.016))+
   geom_errorbar(aes(x = Weight.tot, colour = Protection, 
                 xmin = ifelse(Weight.tot - Weight.tot.se < 0, 0, Weight.tot - Weight.tot.se),
                 xmax = Weight.tot + Weight.tot.se), width = 0.02 * max(Averages$SGR), size = sizese)+
@@ -266,7 +297,70 @@ FOUL.SGR <- ggplot(Averages, aes(x = Weight.tot, y = SGR))+
   geom_text(aes(label = Location), hjust = 0.5, vjust = 0.35)+
   annotate("text", x = 250, y = 0.0080, label = cors$sum[cors$ID == "Weight.totXSGR"], size = 4)
 
+# Herbivores x Growth
+HERB.SGR <- ggplot(Averages, aes(x = Biomass.loc.herb, y = SGR))+
+  geom_point(aes(colour = Protection), size = 6)+
+  scale_color_manual(values = colour_p)+
+  scale_x_continuous(expression(paste("Herbivorous fish (kg ", ha^-1,")")),
+                     breaks = c(0, 250, 500), label = waiver (), limits = c (0, 550))+
+  scale_y_continuous(expression(paste("SGR (", d^-1,")")),
+                     breaks = c(0, 0.005, 0.010, 0.015), label = waiver (), limits = c (0,0.016))+
+  geom_errorbar(aes(x = Biomass.loc.herb, colour = Protection, 
+                xmin = ifelse(Biomass.loc.herb - Biomass.loc.herb.se < 0, 0, Biomass.loc.herb - Biomass.loc.herb.se),
+                xmax = Biomass.loc.herb + Biomass.loc.herb.se), width = 0.02 * max(Averages$SGR), size = sizese)+
+  geom_errorbar(aes(x = Biomass.loc.herb, colour = Protection,
+                ymin = SGR - SGR.se,
+                ymax = SGR + SGR.se), width = 0.02 * max(Averages$Biomass.loc.herb), size = sizese)+
+  geom_smooth(colour = "black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE)+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color = "black", vjust = -1, size = 14),
+    axis.text.x = element_text(angle = 0, size = 14, face = "bold", vjust = 0),
+    axis.title.y = element_text(color = "black", size = 14),
+    axis.text.y = element_text(angle = 0, size = 14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype = 1),
+    panel.border = element_rect(colour = "white", fill = NA, size = 0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour = "#FCFCFC", size = 0.1),
+    plot.margin = margin(Mar, "cm"))+
+  guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+  geom_text(aes(label = Location), hjust = 0.5, vjust = 0.35)+
+  annotate("text", x = 280, y = 0.0075, label = cors$sum[cors$ID == "Biomass.loc.herbXSGR"], size = 4)
 
+# Bites x Growth
+BITES.SGR <- ggplot(Averages, aes(x = msBites_Total_kg.h, y = SGR))+
+  geom_point(aes(colour = Protection), size = 6)+
+  scale_color_manual(values = colour_p)+
+  scale_x_continuous(expression(paste("ms-Bites (kg ", h^-1,")")),
+                     breaks = c(0, 25, 50), label = waiver (), limits = c (0, 50))+
+  scale_y_continuous("", breaks = c(0, 0.005, 0.010, 0.015), label = waiver (), limits = c (0,0.016))+
+  geom_errorbar(aes(x = msBites_Total_kg.h, colour = Protection, 
+                xmin = ifelse(msBites_Total_kg.h - msBites_Total_kg.h.se < 0, 0, msBites_Total_kg.h - msBites_Total_kg.h.se),
+                xmax = msBites_Total_kg.h + msBites_Total_kg.h.se), width = 0.02 * max(Averages$SGR), size = sizese)+
+  geom_errorbar(aes(x = msBites_Total_kg.h, colour = Protection,
+                ymin = SGR - SGR.se,
+                ymax = SGR + SGR.se), width = 0.02 * max(Averages$msBites_Total_kg.h), size = sizese)+
+  geom_smooth(colour = "black", method = "lm", se = FALSE, size = 1.2, fullrange = TRUE, linetype = "dotted")+ 
+  theme(
+    text = element_text(size = 16),
+    axis.title.x = element_text(color = "black", vjust = -1, size = 14),
+    axis.text.x = element_text(angle = 0, size = 14, face = "bold", vjust = 0),
+    axis.title.y = element_text(color = "black", size = 14),
+    axis.text.y = element_text(angle = 0, size = 14, face = "bold", vjust=0),
+    panel.background = element_rect(fill = "#FCFCFC"),
+    plot.background = element_rect(fill = "#FFFFFF"),
+    axis.line = element_line(size = 0.5, colour = "Black", linetype = 1),
+    panel.border = element_rect(colour = "white", fill = NA, size = 0.5),
+    legend.key = element_rect(fill = "#FFFFFF"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(colour = "#FCFCFC", size = 0.1),
+    plot.margin = margin(Mar, "cm"))+
+  guides(shape = guide_legend(order = 2), colour = guide_legend(order = 1))+
+  geom_text(aes(label = Location), hjust = 0.5, vjust = 0.35)+
+  annotate("text", x = 25, y = 0.0055, label = cors$sum[cors$ID == "msBites_Total_kg.hXSGR"], size = 4)
 
 LegPlot <- ggplot(Averages, aes(x = Weight.tot, y = SGR)) + 
   geom_point(aes(colour=Protection), size =8) +
@@ -289,17 +383,19 @@ Leg <- as_ggplot(get_legend(LegPlot))+
 Leg
 
 figure <- ggarrange(HERB.BITES, ggplot() + theme_void(), GRAZERS.BITES, ggplot() + theme_void(), CTE.BITES,
-                    BITES.FOUL, ggplot() + theme_void(), FOUL.SGR, ggplot() + theme_void(), Leg,
-                    labels = c("a", "", "b", "", "c", "d", "", "e", "", ""), vjust = 0.4, hjust = -2.5,
+                    HERB.FOUL, ggplot() + theme_void(),  BITES.FOUL, ggplot() + theme_void(), Leg,
+                    HERB.SGR, ggplot() + theme_void(), BITES.SGR, ggplot() + theme_void(), FOUL.SGR,
+                    labels = c("a", "", "b", "", "c", "d", "", "e", "", "", "f", "", "g", "", "h"),
+                    vjust = 0.4, hjust = -2.5,
                     font.label = list(size = 18, color = "black", face = "bold", family = NULL),
                     widths = c(1, 0.02, 1, 0.02, 1),
-                    ncol = 5, nrow = 2, 
+                    ncol = 5, nrow = 3, 
                     common.legend = T,
                     align = "hv",
                     legend="none")+
   theme(plot.margin = margin(0.4,0.4,0,0, "cm"))
 
-ggsave("Correlations.tiff", figure, width = 24, height = 16, units = "cm", dpi=1200, compression = "lzw")
+ggsave("Correlations.tiff", figure, width = 24, height = 24, units = "cm", dpi=1200, compression = "lzw")
 
 ```
 
